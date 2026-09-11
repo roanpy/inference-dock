@@ -237,6 +237,10 @@ struct ConfigReport: Decodable {
     let path: String
 }
 
+struct PruneModelsResult: Decodable {
+    let removed: [String]
+}
+
 struct RuntimeMetadata: Decodable {
     let id: String?
     let displayName: String?
@@ -513,6 +517,11 @@ final class CoreClient {
         _ = try await send(path: "/v1/reload", method: "POST", body: [:])
     }
 
+    func pruneUnavailableModels() async throws -> PruneModelsResult {
+        let data = try await send(path: "/v1/prune-models", method: "POST", body: [:])
+        return try JSONDecoder().decode(PruneModelsResult.self, from: data)
+    }
+
     private func send(path: String, method: String, body: [String: Any]? = nil, query: [URLQueryItem] = []) async throws -> Data {
         var url = baseURL.appending(path: path)
         if !query.isEmpty, var components = URLComponents(url: url, resolvingAgainstBaseURL: false) {
@@ -567,6 +576,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private weak var settingsMemoryField: NSTextField?
     private weak var settingsIdleField: NSTextField?
     private weak var settingsLoginLaunch: NSButton?
+    private weak var settingsModelsTextView: NSTextView?
+    private weak var settingsPruneModelsButton: NSButton?
     private var settingsResidentChecks: [NSButton] = []
     private var settingsExclusivePopups: [(String, NSPopUpButton)] = []
 
@@ -1054,9 +1065,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsHeading(T("settings.models.heading"), in: stack)
         stack.addArrangedSubview(settingsHint(T("settings.models.description")))
         let scroll = settingsPreview(modelDetailsText(), height: 300)
+        settingsModelsTextView = scroll.documentView as? NSTextView
         stack.addArrangedSubview(scroll)
         settingsFullWidth(scroll, in: stack)
         stack.addArrangedSubview(settingsButton(T("settings.refresh"), action: #selector(refreshSettingsData)))
+        let missing = unavailableModels()
+        let prune = settingsButton(T("settings.models.prune", missing.count), action: #selector(pruneUnavailableModels), enabled: !missing.isEmpty)
+        settingsPruneModelsButton = prune
+        stack.addArrangedSubview(prune)
+        stack.addArrangedSubview(settingsHint(T("settings.models.pruneHint")))
         return settingsContainer(stack)
     }
 
@@ -1142,6 +1159,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }.joined(separator: "\n")
     }
 
+    private func unavailableModels() -> [ModelEntry] {
+        (latestStatus?.models ?? []).filter { $0.available == false && !modelIsLoaded($0) }
+    }
+
     private func capabilityPreviewText() -> String {
         let models = canonicalModels(latestStatus?.models ?? [])
         guard !models.isEmpty else { return T("settings.none") }
@@ -1178,7 +1199,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func reconcileSettings() { refreshNow() }
-    @objc private func refreshSettingsData() { refresh(); settingsWindow?.contentView?.needsDisplay = true }
+    @objc private func refreshSettingsData() { refresh() }
+
+    @objc private func pruneUnavailableModels() {
+        let models = unavailableModels()
+        guard !models.isEmpty else { return }
+        let alert = NSAlert()
+        alert.messageText = T("settings.models.pruneConfirmTitle")
+        alert.informativeText = T("settings.models.pruneConfirmBody", models.map { $0.displayName ?? $0.id }.joined(separator: "\n"))
+        alert.addButton(withTitle: T("settings.models.pruneAction"))
+        alert.addButton(withTitle: T("dialog.cancel"))
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let result = try await self.client.pruneUnavailableModels()
+                await MainActor.run {
+                    self.presentScrollableAlert(title: T("settings.models.pruneDone"), text: result.removed.joined(separator: "\n"))
+                    self.refresh()
+                }
+            } catch { self.presentError(error) }
+        }
+    }
     @objc private func saveSettingsConfig() { checkSettingsConfig() }
 
     @objc private func importEndpointPreview(_ sender: NSButton) {
@@ -1391,6 +1433,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     self.coreSettings = settings
                     self.latestMetrics = metrics
                     self.latestConfig = config
+                    self.settingsModelsTextView?.string = self.modelDetailsText()
+                    let missing = self.unavailableModels()
+                    self.settingsPruneModelsButton?.title = T("settings.models.prune", missing.count)
+                    self.settingsPruneModelsButton?.isEnabled = !missing.isEmpty
                     self.statusItem.button?.toolTip = T("tooltip.active", status.activeModels.isEmpty ? T("none") : status.activeModels.joined(separator: ", "))
                     self.rebuildMenu()
                 }
