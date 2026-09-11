@@ -117,6 +117,15 @@ bytes. This is lifecycle evidence, not a representative speed benchmark.
 
 ## Reliability closeout checks
 
+The reliability suite also covers backend probe failures (`unknown` state with
+last confirmation metadata), dead owned processes, model-state reconciliation,
+content-free persistent metric aggregates, dictionary/list model schemas across
+the six supported Agents, and environment-referenced backend credentials.
+The MLX-Serve Metal GPU timeout path is deterministic-test coverage only; no
+production timeout was observed during this dated run. It is limited to one
+restart of an InferenceDock-owned managed process and never retries a stream
+after response bytes have been sent.
+
 ## MLX-Serve long-context observations (2026-09-11)
 
 Added after a second dated run on the same host, still through
@@ -152,12 +161,3 @@ as full-prefix prefill throughput.
   request while a request was in flight, created a `0600` sibling backup, and
   the remaining models, aliases, and Agent mappings were unchanged. The unused
   adapter record is what the new reviewer flow now removes as well.
-
-The reliability suite also covers backend probe failures (`unknown` state with
-last confirmation metadata), dead owned processes, model-state reconciliation,
-content-free persistent metric aggregates, dictionary/list model schemas across
-the six supported Agents, and environment-referenced backend credentials.
-The MLX-Serve Metal GPU timeout path is deterministic-test coverage only; no
-production timeout was observed during this dated run. It is limited to one
-restart of an InferenceDock-owned managed process and never retries a stream
-after response bytes have been sent.

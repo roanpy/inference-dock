@@ -1004,6 +1004,7 @@ class ModelDispatcher:
         self._requests: dict[str, dict[str, Any]] = {}
         self.settings_path = Path(os.environ.get("INFERENCEDOCK_SETTINGS_PATH", str(SETTINGS_PATH))).expanduser()
         self.settings_warnings: list[str] = []
+        self._ignored_policy_ids: set[str] = set()
         self.settings = self._load_settings()
         # The idle loop reads the config copy, so a timeout persisted in the
         # settings file has to be merged before the thread starts. Without this
@@ -1054,6 +1055,7 @@ class ModelDispatcher:
                 stale = set(policies) - set(known)
                 if stale:
                     self.settings_warnings.append(f"Ignored {len(stale)} removed IDs in {key}.")
+                    self._ignored_policy_ids |= stale
                 payload[key] = {name: policy for name, policy in policies.items() if name in known}
         return payload
 
@@ -1158,6 +1160,7 @@ class ModelDispatcher:
                 raise
             self.settings = updated
             self.settings_warnings.clear()
+            self._ignored_policy_ids.clear()
             self.config = dataclass_replace(self.config, idle_unload_seconds=updated.get("idle_unload_seconds"))
             if updated.get("idle_unload_seconds") is not None and self._idle_thread is None:
                 self._idle_thread = threading.Thread(target=self._idle_loop, name="model-dispatch-idle", daemon=True)
@@ -1367,7 +1370,31 @@ class ModelDispatcher:
             finally:
                 if temp_path is not None:
                     temp_path.unlink(missing_ok=True)
-            return {"removed": sorted(removed), "adapters_removed": sorted(adapter_names), "backup": str(backup)}
+            # The now-inert policy entries for IDs that no longer exist would
+            # otherwise warn on every restart. They are dropped here, with the
+            # policy file backed up first, and this runs after the config write
+            # so a failure here cannot roll the config back.
+            settings_backup = None
+            if self.settings_path.exists() and self._ignored_policy_ids:
+                try:
+                    settings_backup = self.settings_path.with_name(
+                        f"{self.settings_path.name}.bak-before-prune-{time.time_ns()}"
+                    )
+                    with settings_backup.open("xb") as handle:
+                        os.chmod(settings_backup, 0o600)
+                        handle.write(self.settings_path.read_bytes())
+                        handle.flush()
+                        os.fsync(handle.fileno())
+                    self.update_settings({})
+                except (ConfigError, OSError):
+                    self.settings_warnings.append("Policy file could not be rewritten after cleanup.")
+                    settings_backup = None
+            return {
+                "removed": sorted(removed),
+                "adapters_removed": sorted(adapter_names),
+                "backup": str(backup),
+                "settings_backup": str(settings_backup) if settings_backup else None,
+            }
 
     def _transition_keys(self, model: ModelConfig) -> set[str]:
         keys = {f"adapter:{model.adapter}"}
