@@ -1,0 +1,13 @@
+healthCheckTimeout: 15
+logRequests: false
+
+models:
+  fake-alpha:
+    cmd: ${FAKE_PYTHON} ${FAKE_BACKEND} --port ${FAKE_PORT} --events ${FAKE_EVENTS} --stop-file ${FAKE_STOP_FILE} --start-delay 0.6 --sse-chunks 12 --sse-delay 0.35
+    proxy: http://127.0.0.1:${FAKE_PORT}
+    checkEndpoint: /health
+  fake-beta:
+    # Intentionally the same upstream: models live inside one long-running service.
+    cmd: ${FAKE_PYTHON} ${FAKE_BACKEND} --port ${FAKE_PORT} --events ${FAKE_EVENTS} --stop-file ${FAKE_STOP_FILE} --start-delay 0.6 --sse-chunks 12 --sse-delay 0.35
+    proxy: http://127.0.0.1:${FAKE_PORT}
+    checkEndpoint: /health

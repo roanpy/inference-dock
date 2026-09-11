@@ -1,0 +1,18 @@
+schema_version: 1
+id: omlx
+display_name: oMLX
+discover:
+  executables: []
+service:
+  mode: observe
+  service_key: omlx
+  endpoint: http://127.0.0.1:8000
+  health_path: /health
+  models_path: /v1/models
+  protocol: openai-chat
+models_source: service
+# oMLX serves RAG/embedding/reranker workloads and stays resident; it is
+# excluded from eviction while its memory still counts toward admission.
+# No native state/activity probe is declared: none was verified on the
+# running service, so unload results stay unverifiable by design.
+keep_resident: true

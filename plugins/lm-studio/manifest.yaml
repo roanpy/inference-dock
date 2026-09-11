@@ -1,0 +1,16 @@
+schema_version: 1
+id: lm-studio
+display_name: LM Studio
+discover:
+  executables: ["lms"]
+service:
+  # LM Studio owns its GUI service; InferenceDock only observes and proxies.
+  # Native load/unload routes are intentionally not declared until a
+  # fixed-version probe verifies them.
+  mode: observe
+  service_key: lm-studio
+  endpoint: http://127.0.0.1:1234
+  health_path: /v1/models
+  models_path: /v1/models
+  protocol: openai-chat
+models_source: service

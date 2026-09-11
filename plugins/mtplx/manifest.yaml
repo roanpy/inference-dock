@@ -1,0 +1,19 @@
+schema_version: 1
+id: mtplx
+display_name: MTPLX
+discover:
+  executables: ["~/.mtplx/bin/mtplx", "mtplx"]
+  version_args: ["--version"]
+  config_files: ["~/.mtplx/tuning.json"]
+service:
+  mode: managed
+  service_key: mtplx-generation
+  endpoint: http://127.0.0.1:18992
+  health_path: /health
+  catalog_args: [models, --json]
+  protocol: openai-chat
+models_source: discovered
+exclusive_group: large-local
+ownership:
+  mode: managed
+  stop_strategy: process-group

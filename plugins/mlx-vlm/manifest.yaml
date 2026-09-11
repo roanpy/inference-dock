@@ -1,0 +1,15 @@
+schema_version: 1
+id: mlx-vlm
+display_name: mlx-vlm
+discover:
+  # Python console scripts; discovery only confirms the CLI exists.
+  executables: ["mlx_vlm.server", "mlx_vlm"]
+service:
+  # Ports and lifecycle are user-chosen per launch; no endpoint, activation,
+  # or probe is claimed until a fixed-version install is verified.
+  mode: managed
+  service_key: mlx-vlm-server
+  protocol: openai-chat
+models_source: none
+repositories:
+  - remote: https://github.com/Blaizzy/mlx-vlm

@@ -1,0 +1,16 @@
+schema_version: 1
+id: llama-cpp
+display_name: llama.cpp
+discover:
+  executables: ["llama-server"]
+  version_args: ["--version"]
+service:
+  # llama-server embeds one model per process; without a verified start argv
+  # this stays a managed draft (compile_runtime reports it as unresolved).
+  mode: managed
+  service_key: llama-server
+  endpoint: http://127.0.0.1:8080
+  health_path: /health
+  models_path: /v1/models
+  protocol: openai-chat
+models_source: none

@@ -1,0 +1,16 @@
+schema_version: 1
+id: ollama
+display_name: Ollama
+discover:
+  executables: ["ollama"]
+  version_args: ["--version"]
+service:
+  mode: observe
+  service_key: ollama
+  endpoint: http://127.0.0.1:11434
+  health_path: /api/tags
+  # /api/ps reports actually resident models; /v1/models or /api/tags only
+  # list the catalog and must not be used as a state probe.
+  model_state_path: /api/ps
+  protocol: ollama
+models_source: service

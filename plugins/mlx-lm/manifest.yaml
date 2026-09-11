@@ -1,0 +1,15 @@
+schema_version: 1
+id: mlx-lm
+display_name: mlx-lm
+discover:
+  # Python console scripts; discovery only confirms the CLI exists.
+  executables: ["mlx_lm.server", "mlx_lm"]
+service:
+  # Ports and lifecycle are user-chosen per launch; no endpoint, activation,
+  # or probe is claimed until a fixed-version install is verified.
+  mode: managed
+  service_key: mlx-lm-server
+  protocol: openai-chat
+models_source: none
+repositories:
+  - remote: https://github.com/ml-explore/mlx-lm

@@ -1,0 +1,17 @@
+schema_version: 1
+id: fastmlx
+display_name: FastMLX
+discover:
+  executables: ["fastmlx"]
+service:
+  # Dynamic model routes are documented upstream, but query-parameter
+  # semantics still need a fixed-version runtime test before management.
+  mode: observe
+  service_key: fastmlx
+  endpoint: http://127.0.0.1:8000
+  models_path: /v1/models
+  protocol: openai-chat
+models_source: service
+exclusive_group: large-local
+repositories:
+  - remote: https://github.com/arcee-ai/fastmlx
