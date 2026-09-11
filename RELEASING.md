@@ -25,8 +25,8 @@ and release version before any external write.
 4. Extract the archive into a new temporary directory, run the same static
    checks there, and confirm `README.md`, `README.zh-CN.md`, `LICENSE`,
    `SECURITY.md`, CI and all support documents are present.
-5. Create or update the public repository from the extracted tree, add a
-   reviewed tag, then enable the GitHub Actions workflow. Never copy
+5. Push the extracted tree to a public release branch, open a pull request,
+   wait for the required checks, then merge and add the reviewed tag. Never copy
    `config/engines.yaml`, `config/local.preview.yaml`, `.build`, `dist`,
    `logs`, model weights, prompts, credentials, or personal paths.
 6. Attach only the public archive and checksums. Keep a private manifest linking
