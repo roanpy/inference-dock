@@ -205,6 +205,7 @@ class ModelConfig:
     aliases: tuple[str, ...] = ()
     service_variant: str | None = None
     catalog_id: str | None = None
+    runtime_model_id: str | None = None
     asset_paths: tuple[Path, ...] = ()
 
 
@@ -429,6 +430,9 @@ def load_config(path: Path) -> DispatchConfig:
         catalog_id = item.get("catalog_id")
         if catalog_id is not None:
             catalog_id = _string(catalog_id, f"models.{name}.catalog_id")
+        runtime_model_id = item.get("runtime_model_id")
+        if runtime_model_id is not None:
+            runtime_model_id = _string(runtime_model_id, f"models.{name}.runtime_model_id")
         asset_values = item.get("asset_paths")
         if asset_values is None:
             asset_paths = ()
@@ -467,6 +471,7 @@ def load_config(path: Path) -> DispatchConfig:
             aliases=aliases,
             service_variant=service_variant,
             catalog_id=catalog_id,
+            runtime_model_id=runtime_model_id,
             asset_paths=asset_paths,
         )
 
@@ -651,8 +656,7 @@ def local_catalog_reference(adapter: AdapterConfig, backend_model: str) -> str:
     return backend_model
 
 
-def parse_model_list(payload: Any) -> set[str]:
-    """Read model IDs from a standard ``data``/``models`` list response."""
+def model_list_entries(payload: Any) -> list[dict[str, Any]]:
     if isinstance(payload, list):
         entries = payload
     elif isinstance(payload, dict):
@@ -663,10 +667,15 @@ def parse_model_list(payload: Any) -> set[str]:
         entries = None
     if not isinstance(entries, list):
         raise ValueError("model response has no models list")
+    if not all(isinstance(entry, dict) for entry in entries):
+        raise ValueError("model list contains a non-object entry")
+    return entries
+
+
+def parse_model_list(payload: Any) -> set[str]:
+    """Read model IDs from a standard ``data``/``models`` list response."""
     discovered: set[str] = set()
-    for entry in entries:
-        if not isinstance(entry, dict):
-            raise ValueError("model list contains a non-object entry")
+    for entry in model_list_entries(payload):
         found = False
         for key in ("repo_id", "id", "name", "model"):
             value = entry.get(key)
@@ -677,6 +686,17 @@ def parse_model_list(payload: Any) -> set[str]:
         if not found:
             raise ValueError("model list entry has no id")
     return discovered
+
+
+def parse_model_details(payload: Any) -> dict[str, dict[str, Any]]:
+    details = {}
+    for entry in model_list_entries(payload):
+        for key in ("id", "name", "model", "repo_id"):
+            value = entry.get(key)
+            if isinstance(value, str) and value.strip():
+                details[value.strip()] = entry
+                break
+    return details
 
 
 def parse_local_catalog(stdout: str) -> set[str]:
@@ -1496,6 +1516,7 @@ class ModelDispatcher:
                         )
                         if status == 200:
                             result["models"] = parse_model_list(payload)
+                            result["details"] = parse_model_details(payload)
                             result["status"] = "ok"
                         else:
                             result["error"] = "models_probe_failed"
@@ -1533,6 +1554,17 @@ class ModelDispatcher:
         entries = []
         for model in self.config.models.values():
             availability = self._model_availability(model, self.config.adapters, catalogs, models_paths)
+            details = models_paths.get(model.adapter, {}).get("details", {})
+            reported = details.get(model.runtime_model_id or model.backend_model, {})
+            meta = reported.get("meta") if isinstance(reported.get("meta"), dict) else {}
+            reported_context = next((value for value in (reported.get("context_length"), reported.get("max_model_len"), meta.get("context_length")) if isinstance(value, int) and value > 0), None)
+            reported_max_output = next((value for value in (reported.get("max_output_tokens"), meta.get("model_max_tokens")) if isinstance(value, int) and value > 0), None)
+            reported_runtime = []
+            if meta.get("kv_quant") is not None:
+                kv = str(meta["kv_quant"])
+                reported_runtime.append(f"KV {kv}-bit" if kv.isdigit() else f"KV {kv}")
+            if isinstance(meta.get("mtp_loaded"), bool):
+                reported_runtime.append(f"MTP {'on' if meta['mtp_loaded'] else 'off'}")
             if not include_hidden and not (model.advertise and model.enabled and availability["available"] is not False):
                 continue
             entries.append({
@@ -1558,6 +1590,9 @@ class ModelDispatcher:
                 "max_output_tokens": model.max_output_tokens,
                 "reasoning_levels": list(model.reasoning_levels),
                 "runtime_summary": list(model.runtime_summary),
+                "reported_context_window": reported_context,
+                "reported_max_output_tokens": reported_max_output,
+                "reported_runtime_summary": reported_runtime,
                 "state": states[model.name],
                 "observed_state": self._models[model.name].observed_state,
                 "observed_at": self._models[model.name].observed_at,

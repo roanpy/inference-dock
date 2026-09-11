@@ -268,6 +268,9 @@ struct ModelEntry: Decodable {
     let maxOutputTokens: Int?
     let reasoningLevels: [String]
     let runtimeSummary: [String]?
+    let reportedContextWindow: Int?
+    let reportedMaxOutputTokens: Int?
+    let reportedRuntimeSummary: [String]
     let resourceGroup: String?
     let exclusiveGroups: [String]
     let keepResident: Bool
@@ -307,6 +310,9 @@ struct ModelEntry: Decodable {
         case maxOutputTokens = "max_output_tokens"
         case reasoningLevels = "reasoning_levels"
         case runtimeSummary = "runtime_summary"
+        case reportedContextWindow = "reported_context_window"
+        case reportedMaxOutputTokens = "reported_max_output_tokens"
+        case reportedRuntimeSummary = "reported_runtime_summary"
         case resourceGroup = "resource_group"
         case exclusiveGroups = "exclusive_groups"
         case keepResident = "keep_resident"
@@ -341,6 +347,9 @@ struct ModelEntry: Decodable {
         maxOutputTokens = try values.decodeIfPresent(Int.self, forKey: .maxOutputTokens)
         reasoningLevels = try values.decodeIfPresent([String].self, forKey: .reasoningLevels) ?? []
         runtimeSummary = try values.decodeIfPresent([String].self, forKey: .runtimeSummary)
+        reportedContextWindow = try values.decodeIfPresent(Int.self, forKey: .reportedContextWindow)
+        reportedMaxOutputTokens = try values.decodeIfPresent(Int.self, forKey: .reportedMaxOutputTokens)
+        reportedRuntimeSummary = try values.decodeIfPresent([String].self, forKey: .reportedRuntimeSummary) ?? []
         resourceGroup = try values.decodeIfPresent(String.self, forKey: .resourceGroup)
         exclusiveGroups = try values.decodeIfPresent([String].self, forKey: .exclusiveGroups) ?? []
         keepResident = try values.decodeIfPresent(Bool.self, forKey: .keepResident) ?? false
@@ -923,6 +932,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return scroll
     }
 
+    private func presentScrollableAlert(title: String, text: String) {
+        let alert = NSAlert()
+        alert.messageText = title
+        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 600, height: 280))
+        scroll.hasVerticalScroller = true
+        scroll.borderType = .lineBorder
+        let textView = NSTextView(frame: scroll.bounds)
+        textView.isEditable = false
+        textView.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
+        textView.string = text
+        textView.autoresizingMask = [.width, .height]
+        scroll.documentView = textView
+        alert.accessoryView = scroll
+        alert.addButton(withTitle: T("dialog.close"))
+        alert.runModal()
+    }
+
     private func serverSettingsView() -> NSView {
         let stack = settingsStack()
         settingsHeading(T("settings.server.heading"), in: stack)
@@ -1232,11 +1258,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @MainActor
     private func presentImportPreview(_ text: String, success: Bool) {
-        let alert = NSAlert()
-        alert.messageText = T("settings.server.previewTitle")
-        alert.informativeText = (success ? T("settings.server.notSaved") + "\n" : "") + text
-        alert.addButton(withTitle: T("dialog.close"))
-        alert.runModal()
+        presentScrollableAlert(title: T("settings.server.previewTitle"), text: (success ? T("settings.server.notSaved") + "\n" : "") + text)
     }
 
     private func presentErrorMessage(_ message: String) {
@@ -1298,11 +1320,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let file = detail.split(separator: "(", maxSplits: 1).dropFirst().first.map { String($0).replacingOccurrences(of: ")", with: "") }
             return file.map { "\(agent): \(status) (\($0))" } ?? "\(agent): \(status)"
         }
-        let alert = NSAlert()
-        alert.messageText = T("settings.agents.validate")
-        alert.informativeText = localized.joined(separator: "\n")
-        alert.addButton(withTitle: T("dialog.close"))
-        alert.runModal()
+        presentScrollableAlert(title: T("settings.agents.validate"), text: localized.joined(separator: "\n"))
     }
 
     @objc private func savePolicySettings() {
@@ -1548,10 +1566,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 let discoveryText = T("dialog.discovery.summary", added, missing, unavailable)
                 await MainActor.run {
                     self.latestDiscovery = discovery
-                    let alert = NSAlert()
-                    alert.messageText = T("dialog.discovery.title")
-                    alert.informativeText = discoveryText + "\n\n" + self.discoveryText(discovery)
-                    alert.runModal()
+                    self.presentScrollableAlert(title: T("dialog.discovery.title"), text: discoveryText + "\n\n" + self.discoveryText(discovery))
                     self.rebuildMenu()
                 }
             } catch {
@@ -1563,20 +1578,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func showDiscoveryCandidates() {
         guard let latestDiscovery else { return }
-        let alert = NSAlert()
-        alert.messageText = T("dialog.discovery.candidatesTitle")
-        alert.informativeText = discoveryText(latestDiscovery)
-        alert.addButton(withTitle: T("dialog.close"))
-        alert.runModal()
+        presentScrollableAlert(title: T("dialog.discovery.candidatesTitle"), text: discoveryText(latestDiscovery))
     }
 
     @objc private func showImportPreview() {
         guard let latestDiscovery else { return }
-        let alert = NSAlert()
-        alert.messageText = T("dialog.discovery.importTitle")
-        alert.informativeText = T("dialog.discovery.importBody", discoveryText(latestDiscovery))
-        alert.addButton(withTitle: T("dialog.close"))
-        alert.runModal()
+        presentScrollableAlert(title: T("dialog.discovery.importTitle"), text: T("dialog.discovery.importBody", discoveryText(latestDiscovery)))
     }
 
     private func discoveryText(_ payload: DiscoveryPayload) -> String {
@@ -1854,11 +1861,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func showRunHistory() {
-        let alert = NSAlert()
-        alert.messageText = T("dialog.runHistory.title")
-        alert.informativeText = runHistoryText()
-        alert.addButton(withTitle: T("dialog.close"))
-        alert.runModal()
+        presentScrollableAlert(title: T("dialog.runHistory.title"), text: runHistoryText())
     }
 
     private func runHistoryText() -> String {
@@ -1948,8 +1951,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func showModelDetails(_ sender: NSMenuItem) {
         guard let id = sender.representedObject as? String,
               let model = latestStatus?.models.first(where: { $0.id == id }) else { return }
-        let alert = NSAlert()
-        alert.messageText = model.displayName ?? model.id
+        let title = model.displayName ?? model.id
         var lines = [T("details.server", model.serverName ?? model.adapter), T("details.adapter", model.serverID ?? model.adapter), T("details.backend", model.backendModel ?? model.id)]
         lines.append(T("details.source", model.pluginID ?? model.adapter))
         lines.append(T("details.configPath", latestConfig?.path ?? configPath().path))
@@ -1958,15 +1960,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         lines.append(T("details.loaded", model.loaded.map { $0 ? T("value.true") : T("value.false") } ?? T("unknown")))
         if let context = model.contextWindow { lines.append(T("details.context", context / 1024)) }
         if let runtime = model.runtimeSummary, !runtime.isEmpty { lines.append(T("details.runtime", runtime.joined(separator: ", "))) }
+        if model.reportedContextWindow != nil || model.reportedMaxOutputTokens != nil || !model.reportedRuntimeSummary.isEmpty {
+            lines.append(T("details.reported", model.reportedContextWindow.map(String.init) ?? T("unknown"), model.reportedMaxOutputTokens.map(String.init) ?? T("unknown"), model.reportedRuntimeSummary.isEmpty ? T("unknown") : model.reportedRuntimeSummary.joined(separator: ", ")))
+        }
         lines.append(T("details.configured", model.contextWindow.map(String.init) ?? T("unknown"), model.maxOutputTokens.map(String.init) ?? T("unknown"), model.reasoningLevels.isEmpty ? T("unknown") : model.reasoningLevels.joined(separator: ",")))
         lines.append(T("details.capabilitiesConfigured", capabilitySummary(model.capabilities)))
         lines.append(T("details.capabilitiesReported", T("unknown")))
         lines.append(T("details.capabilitiesVerified", T("unknown")))
         lines.append(T("details.effective"))
         if !model.aliases.isEmpty { lines.append(T("details.aliases", model.aliases.joined(separator: ", "))) }
-        alert.informativeText = lines.joined(separator: "\n")
-        alert.addButton(withTitle: T("dialog.close"))
-        alert.runModal()
+        presentScrollableAlert(title: title, text: lines.joined(separator: "\n"))
     }
 
     private func capabilitySummary(_ capabilities: [String: Bool]) -> String {
