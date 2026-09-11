@@ -1,0 +1,22 @@
+schema_version: 1
+id: mlx-serve
+display_name: MLX-Serve
+discover:
+  executables: ["mlx-serve"]
+service:
+  mode: external
+  service_key: mlx-serve
+  endpoint: http://127.0.0.1:11234
+  health_path: /health
+  models_path: /v1/models
+  protocol: openai-chat
+  activation:
+    type: http
+    method: POST
+    path: /v1/load-model
+  deactivation:
+    type: http
+    method: POST
+    path: /v1/unload-model
+models_source: service
+exclusive_group: large-local

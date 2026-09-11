@@ -1,0 +1,17 @@
+schema_version: 1
+id: ds4
+display_name: DS4
+discover:
+  executables: []
+  config_files: ["~/Developer/ds4/config/local-runtime.json"]
+  config_reader: ds4_runtime
+  repo_paths: ["~/Developer/ds4", "~/Developer/ds4-qwen38-pr991"]
+service:
+  mode: external
+  service_key: ds4-router
+  endpoint: http://127.0.0.1:8888
+  health_path: /_router/status
+  models_path: /v1/models
+  protocol: openai-chat
+models_source: service
+exclusive_group: large-local

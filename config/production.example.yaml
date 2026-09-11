@@ -1,0 +1,65 @@
+# Production mapping example. It is not enabled by default. Copy it to a local
+# configuration file and verify every entry before use. It never installs or
+# modifies DS4, MLX-Serve, or oMLX.
+
+listen_host: 127.0.0.1
+listen_port: 18800
+load_timeout_seconds: 60
+connect_timeout_seconds: 3
+request_timeout_seconds: 120
+max_body_bytes: 4194304
+request_poll_seconds: 0.05
+# idle_unload_seconds: 300  # opt-in for dispatcher-owned managed services
+
+adapters:
+  # Optional service metadata drives grouping and labels in the menu:
+  #   plugin_id: mlx-serve        # which plugin manifest this instance follows
+  #   service_key: mlx-serve      # stable service identifier
+  #   service_version: "1.2.3"    # observed or pinned backend version
+  #   display_name: MLX-Serve     # human label
+  #   menu_group: MLX             # menu grouping key
+  ds4-router:
+    type: external
+    endpoint: http://127.0.0.1:8888
+    health_path: /_router/status
+  mlx-serve:
+    type: external
+    endpoint: http://127.0.0.1:11234
+    health_path: /health
+  omlx-observe:
+    type: observe
+    endpoint: http://127.0.0.1:8000
+    health_path: /health
+    keep_resident: true
+
+resource_groups:
+  large-local:
+    capacity: 1
+
+models:
+  # Replace placeholder model IDs and activation routes after probing the real service.
+  ds4-placeholder:
+    adapter: ds4-router
+    backend_model: ds4-placeholder
+    resource_group: large-local
+    lifecycle_owner: ds4-router
+    # Enable only after confirming the DS4 router's explicit switch contract.
+    # activate_path: /_router/switch
+    # activate_payload:
+    #   model: ds4-placeholder
+    capabilities:
+      chat: true
+      stream: true
+      vision: false
+  mlx-placeholder:
+    adapter: mlx-serve
+    backend_model: mlx-placeholder
+    resource_group: large-local
+    lifecycle_owner: mlx-serve
+    # activate_path: /v1/models/load
+    # activate_payload:
+    #   model: mlx-placeholder
+    capabilities:
+      chat: true
+      stream: true
+      vision: false

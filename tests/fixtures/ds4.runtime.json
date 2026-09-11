@@ -1,0 +1,55 @@
+{
+  "router": {
+    "host": "127.0.0.1",
+    "port": 8888,
+    "idle_timeout_seconds": 600,
+    "backend_start_timeout_seconds": 120
+  },
+  "paths": {
+    "symlink": "current",
+    "lock_file": "router.lock"
+  },
+  "variants": {
+    "ds4high": {
+      "path": "gguf/fixture-high.gguf",
+      "context": 307200,
+      "output": 32768,
+      "runtime": {
+        "vision_model": "gguf/fixture-vision.gguf",
+        "auxiliary_model": "gguf/fixture-aux.gguf",
+        "dspark": true
+      }
+    },
+    "ds4pro": {
+      "path": "gguf/fixture-pro.gguf",
+      "advertise": false,
+      "context": 131072,
+      "output": 8192,
+      "runtime": {
+        "ssd_streaming": true
+      }
+    }
+  },
+  "services": {
+    "ds4": {
+      "label": "com.fixture.ds4-server",
+      "plist": "~/Library/LaunchAgents/com.fixture.ds4-server.plist",
+      "port": 18888,
+      "model": "ds4high",
+      "context": 307200,
+      "output": 32768
+    },
+    "glm53q2": {
+      "label": "com.fixture.ds4-glm",
+      "plist": "com.fixture.ds4-glm.plist",
+      "port": 18953,
+      "model": "ds4high",
+      "context": 307200,
+      "output": 32768,
+      "api_key": "fixture-secret-value"
+    }
+  },
+  "aliases": {
+    "glm-5.3-flash": ["glm53q2", null]
+  }
+}

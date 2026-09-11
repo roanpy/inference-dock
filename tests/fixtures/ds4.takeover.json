@@ -1,0 +1,31 @@
+{
+  "router": {
+    "host": "127.0.0.1",
+    "port": 8888
+  },
+  "variants": {
+    "ds4high": {
+      "path": "fixtures/models/fixture-high.gguf",
+      "context": 307200,
+      "output": 32768,
+      "runtime": {
+        "vision_model": "fixtures/models/fixture-vision.gguf",
+        "auxiliary_model": "fixtures/models/fixture-aux.gguf",
+        "dspark": true
+      }
+    }
+  },
+  "services": {
+    "ds4": {
+      "label": "com.fixture.ds4-server",
+      "plist": "fixtures/ds4-server.fixture.plist",
+      "port": 18888,
+      "model": "ds4high",
+      "context": 307200,
+      "output": 32768
+    }
+  },
+  "aliases": {
+    "ds4high": ["ds4", "ds4high"]
+  }
+}
