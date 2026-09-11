@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.fixture.ds4-server</string>
+	<key>KeepAlive</key>
+	<false/>
+	<key>RunAtLoad</key>
+	<false/>
+	<key>WorkingDirectory</key>
+	<string>/fixture/ds4</string>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>DS4_ENV_KEEP</key>
+		<string>1</string>
+	</dict>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/usr/local/bin/ds4-server</string>
+		<string>--model</string>
+		<string>/fixture/old.gguf</string>
+		<string>--port</string>
+		<string>18888</string>
+		<string>--ctx</string>
+		<string>524288</string>
+		<string>--tokens</string>
+		<string>32768</string>
+		<string>--kv-disk-dir</string>
+		<string>/fixture/kv</string>
+		<string>--vision</string>
+		<string>/fixture/old-vision.gguf</string>
+	</array>
+</dict>
+</plist>

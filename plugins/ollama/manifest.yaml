@@ -1,0 +1,13 @@
+schema_version: 1
+id: ollama
+display_name: Ollama
+discover:
+  executables: ["ollama"]
+  version_args: ["--version"]
+service:
+  mode: observe
+  service_key: ollama
+  endpoint: http://127.0.0.1:11434
+  health_path: /api/tags
+  protocol: ollama
+models_source: service

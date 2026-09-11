@@ -1,0 +1,51 @@
+listen_host: 127.0.0.1
+listen_port: 18800
+load_timeout_seconds: 10
+connect_timeout_seconds: 3
+request_timeout_seconds: 120
+max_body_bytes: 4194304
+request_poll_seconds: 0.05
+# idle_unload_seconds: 300  # opt-in; managed models may unload after idle
+
+adapters:
+  # fake：测试专用，启动独立 Python 假后端。
+  fake:
+    type: fake
+    script: scripts/fake_backend.py
+    port: 18991
+    start_delay_seconds: 0.2
+    sse_chunks: 6
+    sse_delay_seconds: 0.25
+    keep_resident: false
+    exclusive_group: large-local
+    env: {}
+  # managed：调度器按 adapter 启动/停止整个服务；同 adapter 的模型切换由服务自身语义决定。
+  # external：只观察既有 loopback 服务，不启动、不停止。
+
+resource_groups:
+  large-local:
+    capacity: 1
+
+models:
+  fake-alpha:
+    adapter: fake
+    backend_model: fake-alpha
+    resource_group: large-local
+    lifecycle_owner: model-dispatch
+    capabilities:
+      chat: true
+      stream: true
+      vision: false
+    keep_resident: false
+    exclusive_group: large-local
+  fake-beta:
+    adapter: fake
+    backend_model: fake-beta
+    resource_group: large-local
+    lifecycle_owner: model-dispatch
+    capabilities:
+      chat: true
+      stream: true
+      vision: false
+    keep_resident: false
+    exclusive_group: large-local

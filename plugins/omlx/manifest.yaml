@@ -1,0 +1,13 @@
+schema_version: 1
+id: omlx
+display_name: oMLX
+discover:
+  executables: []
+service:
+  mode: observe
+  service_key: omlx
+  endpoint: http://127.0.0.1:8000
+  health_path: /health
+  models_path: /v1/models
+  protocol: openai-chat
+models_source: service
