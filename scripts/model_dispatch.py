@@ -9,6 +9,7 @@ import math
 import os
 import re
 import shlex
+import shutil
 import signal
 import socket
 import statistics
@@ -1254,6 +1255,55 @@ class ModelDispatcher:
                 for adapter in config.adapters.values()
             ],
         }
+
+    def prune_unavailable_models(self) -> dict[str, Any]:
+        """Remove only confirmed-missing, unloaded model mappings from the user config."""
+        with self.condition:
+            if self.active_requests or self._busy():
+                raise DispatchError("cannot clean model configuration while the dispatcher is busy", 409, "dispatcher_busy")
+        self._refresh_local_catalogs(force=True)
+        self._refresh_models_paths(force=True)
+        catalogs = self._catalog_snapshot()
+        models_paths = self._models_path_snapshot()
+        removed = {
+            model.name for model in self.config.models.values()
+            if self._models[model.name].state not in {"loading", "ready", "generating", "busy"}
+            and self._model_availability(model, self.config.adapters, catalogs, models_paths)["available"] is False
+        }
+        while True:
+            dependent = {model.name for model in self.config.models.values() if model.canonical in removed}
+            if dependent <= removed:
+                break
+            removed.update(dependent)
+        if not removed:
+            raise DispatchError("no confirmed-missing model configuration to clean", 409, "no_unavailable_models")
+        if len(removed) >= len(self.config.models):
+            raise DispatchError("refusing to remove every configured model", 409, "invalid_config")
+
+        path = self.config.path
+        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+        if not isinstance(raw, dict) or not isinstance(raw.get("models"), dict):
+            raise DispatchError("configuration has no writable models mapping", 500, "config_update_failed")
+        for name in removed:
+            raw["models"].pop(name, None)
+        backup = path.with_name(f"{path.name}.bak-before-prune-{time.strftime('%Y%m%d-%H%M%S')}")
+        shutil.copy2(path, backup)
+        temp_path = None
+        try:
+            with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, delete=False) as handle:
+                yaml.safe_dump(raw, handle, allow_unicode=True, sort_keys=False)
+                handle.flush()
+                os.fsync(handle.fileno())
+                temp_path = Path(handle.name)
+            os.replace(temp_path, path)
+            self.reload_config()
+        except Exception:
+            shutil.copy2(backup, path)
+            raise
+        finally:
+            if temp_path is not None and temp_path.exists():
+                temp_path.unlink()
+        return {"removed": sorted(removed), "backup": str(backup)}
 
     def _transition_keys(self, model: ModelConfig) -> set[str]:
         keys = {f"adapter:{model.adapter}"}
@@ -2792,6 +2842,14 @@ class DispatchHandler(BaseHTTPRequestHandler):
                 self._error(DispatchError(str(exc), 400 if isinstance(exc, ConfigError) else 500, "invalid_settings" if isinstance(exc, ConfigError) else "settings_persist_failed"))
             else:
                 self._json(200, settings)
+            return
+        if self.path == "/v1/prune-models":
+            try:
+                result = self.server.dispatcher.prune_unavailable_models()
+            except (DispatchError, OSError, yaml.YAMLError) as exc:
+                self._error(exc if isinstance(exc, DispatchError) else DispatchError(str(exc), 500, "config_update_failed"))
+            else:
+                self._json(200, result)
             return
         if self.path == "/v1/cancel":
             try:

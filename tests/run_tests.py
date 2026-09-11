@@ -2511,6 +2511,38 @@ def test_generic_model_availability_evidence():
             dispatcher.shutdown()
 
 
+def test_prune_unavailable_models_backs_up_and_reloads():
+    with tempfile.TemporaryDirectory(prefix="model-dispatch-prune-test-") as tmp:
+        root = Path(tmp)
+        catalog_script = "import json; print(json.dumps({'data': [{'id': 'present-id'}]}))"
+        config_data = {
+            "listen_port": free_port(),
+            "adapters": {
+                "cli": {
+                    "type": "managed",
+                    "port": free_port(),
+                    "command": [sys.executable],
+                    "catalog_args": ["-c", catalog_script],
+                },
+            },
+            "models": {
+                "present": {"adapter": "cli", "backend_model": "present-id"},
+                "missing": {"adapter": "cli", "backend_model": "missing-id"},
+            },
+        }
+        path = root / "engines.yaml"
+        path.write_text(yaml.safe_dump(config_data, sort_keys=False), encoding="utf-8")
+        dispatcher = model_dispatch.ModelDispatcher(model_dispatch.load_config(path), root)
+        try:
+            result = dispatcher.prune_unavailable_models()
+            assert result["removed"] == ["missing"]
+            assert Path(result["backup"]).is_file()
+            assert set(dispatcher.config.models) == {"present"}
+            assert set(yaml.safe_load(path.read_text(encoding="utf-8"))["models"]) == {"present"}
+        finally:
+            dispatcher.shutdown()
+
+
 def test_slow_load_does_not_freeze_status_ready_models_or_cancel():
     class SlowBackend:
         barrier = None
@@ -2760,6 +2792,9 @@ def main():
     print("run test_generic_model_availability_evidence", flush=True)
     test_generic_model_availability_evidence()
     print("ok test_generic_model_availability_evidence", flush=True)
+    print("run test_prune_unavailable_models_backs_up_and_reloads", flush=True)
+    test_prune_unavailable_models_backs_up_and_reloads()
+    print("ok test_prune_unavailable_models_backs_up_and_reloads", flush=True)
     print("run test_identity_validation_and_diagnostics", flush=True)
     test_identity_validation_and_diagnostics()
     print("ok test_identity_validation_and_diagnostics", flush=True)
