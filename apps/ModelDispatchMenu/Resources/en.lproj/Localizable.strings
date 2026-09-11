@@ -119,7 +119,7 @@
 "settings.models.pruneModels" = "Missing model";
 "settings.models.pruneAdapters" = "Unused adapter";
 "settings.models.pruneStale" = "The configuration changed and is refreshing; review the list and try again.";
-"settings.models.pruneHint" = "Removes confirmed-missing configuration records only. Model files are never deleted, and a backup is created first.";
+"settings.models.pruneHint" = "Removes confirmed-missing configuration records only. Model files are never deleted, and both the configuration and policy files are backed up first.";
 "settings.models.pruneConfirmTitle" = "Clean missing model mappings?";
 "settings.models.pruneConfirmBody" = "These configuration records will be removed after a backup is created:\n\n%@";
 "settings.models.pruneAction" = "Clean mappings";

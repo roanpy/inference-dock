@@ -128,6 +128,11 @@ keeps the same fail-closed rules as the rest of the dispatcher:
   permissions before the replacement, the write is atomic, and a failure
   restores the backup. Model files, third-party configuration, and provider
   files are never touched.
+- Policy entries for IDs that no longer exist are dropped from the settings
+  file at the same time, so the drift warning does not reappear on every
+  restart. That file is backed up as `<settings>.bak-before-prune-<ns>` with
+  `0600` permissions first, and a failure there is reported separately instead
+  of rolling the configuration back.
 
 `GET /v1/config` also reports `settings_path`, `settings_warnings`,
 `unused_adapters`, and the `revision` used above, so an operator can see why a
@@ -142,7 +147,9 @@ Smart scheduling, the idle-unload timeout, and the surviving per-model policies
 stay active. Policy writes through `POST /v1/settings` are still strict: an
 unknown ID in a request body is rejected so a typo cannot create a policy for a
 model that does not exist. `POST /v1/reload` keeps the effective policy across
-a configuration reload and starts the idle timer if the reload enables one.
+a configuration reload and starts the idle timer if the reload enables one. A
+reviewed cleanup persists the filtered result, so the warning clears itself
+instead of repeating on every restart.
 
 ## Metrics configuration
 

@@ -2534,8 +2534,29 @@ def test_prune_unavailable_models_backs_up_and_reloads():
         config_data["adapters"]["unused"] = {"type": "managed", "port": free_port(), "command": [sys.executable]}
         path = root / "engines.yaml"
         path.write_text(yaml.safe_dump(config_data, sort_keys=False), encoding="utf-8")
-        dispatcher = model_dispatch.ModelDispatcher(model_dispatch.load_config(path), root)
+        settings_path = root / "settings.json"
+        settings_path.write_text(
+            json.dumps(
+                {
+                    "smart_scheduling": True,
+                    "idle_unload_seconds": 300,
+                    "adapter_policies": {"unused": {"keep_resident": False}},
+                    "model_policies": {"missing": {"keep_resident": True}, "present": {"keep_resident": True}},
+                }
+            ),
+            encoding="utf-8",
+        )
+        old_settings = os.environ.get("INFERENCEDOCK_SETTINGS_PATH")
+        os.environ["INFERENCEDOCK_SETTINGS_PATH"] = str(settings_path)
         try:
+            dispatcher = model_dispatch.ModelDispatcher(model_dispatch.load_config(path), root)
+        finally:
+            if old_settings is None:
+                os.environ.pop("INFERENCEDOCK_SETTINGS_PATH", None)
+            else:
+                os.environ["INFERENCEDOCK_SETTINGS_PATH"] = old_settings
+        try:
+            assert dispatcher.settings["model_policies"]["missing"]["keep_resident"] is True
             revision = dispatcher.config_report()["revision"]
             assert dispatcher.config_report()["unused_adapters"] == ["unused"]
             # Only the reviewed IDs leave the file, and a stale revision is refused.
@@ -2560,6 +2581,20 @@ def test_prune_unavailable_models_backs_up_and_reloads():
             written = yaml.safe_load(path.read_text(encoding="utf-8"))
             assert set(written["models"]) == {"present"} and set(written["adapters"]) == {"cli"}
             assert set(dispatcher.config.models) == {"present"}
+            # Cleanup also drops the reviewed IDs from the policy file, keeps
+            # the surviving policy, and backs the policy file up first.
+            policy_backup = result["settings_backup"]
+            assert policy_backup and Path(policy_backup).is_file(), result
+            assert stat.S_IMODE(Path(policy_backup).stat().st_mode) == 0o600
+            assert json.loads(Path(policy_backup).read_text(encoding="utf-8"))["model_policies"]["missing"]
+            written_settings = json.loads(settings_path.read_text(encoding="utf-8"))
+            assert "missing" not in written_settings["model_policies"]
+            assert "unused" not in written_settings["adapter_policies"]
+            assert written_settings["model_policies"]["present"]["keep_resident"] is True
+            assert written_settings["smart_scheduling"] is True
+            assert written_settings["idle_unload_seconds"] == 300.0
+            assert dispatcher.settings_warnings == []
+            assert dispatcher.config_report()["settings_warnings"] == []
             try:
                 dispatcher.prune_unavailable_models(["missing"], revision, [])
             except model_dispatch.DispatchError:

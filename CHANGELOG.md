@@ -27,6 +27,9 @@ developer preview.
   sample counts; it is no longer limited to this process's in-memory tail.
 - The import template list is read from the bundled plugin manifests, so a new
   engine manifest appears without editing the menu source.
+- Cleaning missing mappings also drops the now-inert policy entries for IDs that
+  no longer exist, so the drift warning clears instead of repeating on every
+  restart; the settings file is backed up with `0600` permissions first.
 
 ### v0.1.0-dev.2
 

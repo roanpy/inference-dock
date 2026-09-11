@@ -119,7 +119,7 @@
 "settings.models.pruneModels" = "失效模型";
 "settings.models.pruneAdapters" = "未使用的适配器";
 "settings.models.pruneStale" = "配置已变更，正在刷新；请确认清理列表后重试。";
-"settings.models.pruneHint" = "只移除已确认本地缺失的配置记录，不删除模型文件；操作前会自动备份。";
+"settings.models.pruneHint" = "只移除已确认本地缺失的配置记录，不删除模型文件；配置与策略文件都会先自动备份。";
 "settings.models.pruneConfirmTitle" = "清理失效模型配置？";
 "settings.models.pruneConfirmBody" = "备份后将移除以下配置记录：\n\n%@";
 "settings.models.pruneAction" = "清理配置";
