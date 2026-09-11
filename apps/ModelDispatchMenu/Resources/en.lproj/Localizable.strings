@@ -83,6 +83,7 @@
 "details.loaded" = "Loaded: %@";
 "details.context" = "Context: %dK";
 "details.runtime" = "Runtime: %@";
+"details.reported" = "Server reported: context_window=%@, max_output_tokens=%@, runtime=%@";
 "details.configured" = "Configured: context_window=%@, max_output_tokens=%@, reasoning_levels=%@";
 "details.effective" = "Effective: backend did not echo parameters (unknown)";
 "details.capabilitiesConfigured" = "Capabilities configured: %@";

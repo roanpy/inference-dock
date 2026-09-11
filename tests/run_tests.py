@@ -2454,7 +2454,7 @@ def test_generic_model_availability_evidence():
             },
             "models": {
                 "cli-model": {"adapter": "cli", "backend_model": "backend", "catalog_id": "catalog-model"},
-                "http-model": {"adapter": "http", "backend_model": "http-id"},
+                "http-model": {"adapter": "http", "backend_model": "http-id", "runtime_model_id": "runtime-id"},
                 "asset-model": {"adapter": "http", "backend_model": "asset-id", "asset_paths": [asset.name]},
             },
         }
@@ -2465,10 +2465,14 @@ def test_generic_model_availability_evidence():
         http_state = {"healthy": True, "models": {"http-id", "asset-id"}}
         try:
             model_dispatch.ProcessBackend.healthy = lambda self: http_state["healthy"]
-            model_dispatch.http_json = lambda *args, **kwargs: (200, {"models": [{"name": item} for item in http_state["models"]]})
+            model_dispatch.http_json = lambda *args, **kwargs: (200, {"models": [{"name": item} for item in http_state["models"]] + [{"name": "runtime-id", "context_length": 524288, "meta": {"model_max_tokens": 262144, "kv_quant": "8", "mtp_loaded": True}}]})
             marker.write_text("present", encoding="utf-8")
             listed = {entry["id"] for entry in dispatcher.model_entries()}
             assert listed == {"cli-model", "http-model", "asset-model"}
+            http_model = next(entry for entry in dispatcher.model_entries() if entry["id"] == "http-model")
+            assert http_model["reported_context_window"] == 524288
+            assert http_model["reported_max_output_tokens"] == 262144
+            assert http_model["reported_runtime_summary"] == ["KV 8-bit", "MTP on"]
             marker.unlink()
             dispatcher._refresh_local_catalogs(force=True)
             hidden = {entry["id"]: entry for entry in dispatcher.model_entries(include_hidden=True)}

@@ -97,6 +97,10 @@ Use `models.<id>.catalog_id` when the native catalog ID differs from the API
 `backend_model`. Catalog responses may use a root `data` or `models` list and
 the entry fields `repo_id`, `id`, `name`, or `model`.
 
+Use `models.<id>.runtime_model_id` when a server reports live settings under a
+loaded model ID that differs from the request or catalog ID. InferenceDock then
+reads context and runtime flags from that server entry without reading GUI files.
+
 Probes are cached for at most 10 seconds. A confirmed missing catalog entry or
 asset marks the model unavailable, omits it from `/v1/models`, and rejects a
 new managed start. Unreachable services and invalid probe responses remain

@@ -83,6 +83,7 @@
 "details.loaded" = "已加载：%@";
 "details.context" = "上下文：%dK";
 "details.runtime" = "运行时：%@";
+"details.reported" = "服务器实测：context_window=%@，max_output_tokens=%@，运行参数=%@";
 "details.configured" = "配置值：context_window=%@，max_output_tokens=%@，reasoning_levels=%@";
 "details.effective" = "生效值：后端未回显参数（unknown）";
 "details.capabilitiesConfigured" = "已配置能力：%@";
