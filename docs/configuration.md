@@ -109,6 +109,41 @@ retains the configured row and sanitized evidence for diagnosis; no local path
 is returned. Restoring the native model makes the configured entry available
 again without rewriting YAML.
 
+## Reviewed removal of configuration records
+
+Unavailable rows stay in the configuration on purpose. Removing them is an
+explicit, reviewed action (`/v1/prune-models`, or Models tab in the menu) that
+keeps the same fail-closed rules as the rest of the dispatcher:
+
+- The request must carry the exact model IDs, the exact unused-adapter IDs, and
+  the current `revision` from `GET /v1/config`. A stale revision, a missing or
+  duplicate ID, and an empty selection are all rejected with 400/409.
+- A model is removable only while it is confirmed missing locally (catalog,
+  `models_path`, or `asset_paths`) and not resident. A model that is loading,
+  ready, unknown, or referenced as another model's `canonical` target is
+  refused, and the last configured model can never be removed.
+- An adapter is removable only when no remaining model references it and no
+  live process owned by the dispatcher is running it.
+- The previous file is copied to `<config>.bak-before-prune-<ns>` with `0600`
+  permissions before the replacement, the write is atomic, and a failure
+  restores the backup. Model files, third-party configuration, and provider
+  files are never touched.
+
+`GET /v1/config` also reports `settings_path`, `settings_warnings`,
+`unused_adapters`, and the `revision` used above, so an operator can see why a
+runtime decision was taken.
+
+## Policy file drift
+
+`settings.json` outlives `engines.yaml`. If it still lists a model or adapter
+that was removed from the configuration, those IDs are ignored on load and
+reported as a warning (`settings_warnings`) instead of invalidating the file.
+Smart scheduling, the idle-unload timeout, and the surviving per-model policies
+stay active. Policy writes through `POST /v1/settings` are still strict: an
+unknown ID in a request body is rejected so a typo cannot create a policy for a
+model that does not exist. `POST /v1/reload` keeps the effective policy across
+a configuration reload and starts the idle timer if the reload enables one.
+
 ## Metrics configuration
 
 Set `metrics_path` to a dedicated, writable JSONL path outside the application

@@ -276,9 +276,13 @@ server/config path checks, read-only instance and capability previews, policy
 controls, agent endpoint previews, and update diagnostics. The Server tab can
 preview an explicitly selected loopback endpoint, executable, source
 directory, or supported config file through the bundled plugin importer; this
-is deliberately read-only and never scans or writes `engines.yaml`. Deleting
-import mappings, provider-file application, and release rollback remain disabled
-until their backup-protected APIs are implemented.
+is deliberately read-only and never scans or writes `engines.yaml`. The Models
+tab can clean a reviewed list of confirmed-missing mapping records and unused
+adapters: the request carries the exact IDs plus the configuration revision, the
+core refuses a stale revision, a resident model, or a still-referenced adapter,
+and a permission-restricted backup is written first. Model files, third-party
+configuration, and provider files are never modified; release rollback stays a
+maintainer procedure.
 
 Run the full local gate (it never starts a real model):
 

@@ -117,6 +117,42 @@ bytes. This is lifecycle evidence, not a representative speed benchmark.
 
 ## Reliability closeout checks
 
+## MLX-Serve long-context observations (2026-09-11)
+
+Added after a second dated run on the same host, still through
+`127.0.0.1:18800`. The managed MLX-Serve instance started with
+`--ctx-size 262144 --max-resident-models 1 --idle-evict-secs 300 --mtp`, and
+per-model settings (`ctx=524288`, `kv=8`, `mtp=on`) were applied from the
+engine's own model-settings file and confirmed in its log:
+`[model-settings] ... ctx=524288 kv=8 mtp=on`, `mtp=enabled (streaming, depth=6)`.
+
+| Observation | Value |
+| --- | --- |
+| Longest request served | 183,272 prompt tokens at 524,288 configured context |
+| Prefix-cache reuse | 182,184 cached of 183,272 prompt tokens |
+| Prefill rate on that request | about 555 tok/s measured on the appended uncached tokens |
+| Decode rate on that request | about 24 tok/s at depth 6 MTP |
+| Cached-request decode median | about 35.5 tok/s over 849 stored samples |
+| Cold load median | about 13.3 s over 38 stored cold starts |
+
+Limits: these are single-host observations with MTP adaptive depth and varying
+prompt shapes, not a benchmark. KV 8-bit was active in every sample, so no
+KV-8 versus KV-16 comparison exists yet, and the prefill figure covers only the
+tokens appended after the cached prefix. A cached request must never be quoted
+as full-prefix prefill throughput.
+
+## Settings and cleanup verification (2026-09-11)
+
+- A settings file that still referenced a removed model discarded the whole
+  saved policy (smart scheduling and the 300 s idle timeout silently reverted).
+  After the fix, unknown IDs are ignored with a warning and the surviving policy
+  is kept; this is covered by `test_settings_survive_removed_model_ids`.
+- Reviewed cleanup removed one confirmed-missing MTPLX mapping
+  (`mtplx-qwen38-flash`) from the local configuration. The core refused the
+  request while a request was in flight, created a `0600` sibling backup, and
+  the remaining models, aliases, and Agent mappings were unchanged. The unused
+  adapter record is what the new reviewer flow now removes as well.
+
 The reliability suite also covers backend probe failures (`unknown` state with
 last confirmation metadata), dead owned processes, model-state reconciliation,
 content-free persistent metric aggregates, dictionary/list model schemas across

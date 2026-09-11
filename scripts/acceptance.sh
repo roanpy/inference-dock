@@ -26,12 +26,21 @@ python3 tests/test_migration_helper.py
 python3 tests/test_update_monitor.py
 python3 tests/test_export_source.py
 swift build
-for pattern in 'openSettingsWindow' 'settings.tab.server' 'settings.tab.models' 'settings.tab.policy' 'settings.tab.agents' 'settings.tab.diagnostics' 'settings.server.instancePreview' 'settings.server.previewEndpoint' 'settings.server.previewPath' 'settings.server.notSaved' 'importEndpointPreview' 'importPathPreview' 'runPluginImportPreview' 'settings.server.unsupportedActions' 'settings.capabilities.heading' 'settings.policy.exclusive' 'settings.policy.resident' 'settings.disable' 'settings.delete' 'settings.updates.rollback' 'systemSettings' 'checkUpdates' 'runHistory' 'showModelDetails' 'stopCore' 'DiscoveryDiagnostic' 'dialog.discovery.diagnostics' 'state.external' 'state.disabled' 'details.configured' 'details.effective' 'maxOutputTokens' 'max' 'median' 'unknown' 'MetricsPayload' '/v1/metrics' '/v1/reload' 'update_monitor.py' 'SMAppService' 'loginLaunchPreferred' '/v1/settings' '/v1/cancel' 'adapter_policies' 'model_policies' 'exclusive_groups' 'estimated_memory_gb'; do
+for pattern in 'openSettingsWindow' 'settings.tab.server' 'settings.tab.models' 'settings.tab.policy' 'settings.tab.agents' 'settings.tab.diagnostics' 'settings.server.instancePreview' 'settings.server.previewEndpoint' 'settings.server.previewPath' 'settings.server.notSaved' 'importEndpointPreview' 'importPathPreview' 'runPluginImportPreview' 'settings.server.unsupportedActions' 'settings.capabilities.heading' 'settings.policy.exclusive' 'settings.policy.resident' 'settings.disable' 'settings.delete' 'settings.updates.rollback' 'systemSettings' 'checkUpdates' 'runHistory' 'showModelDetails' 'stopCore' 'DiscoveryDiagnostic' 'dialog.discovery.diagnostics' 'state.external' 'state.disabled' 'details.configured' 'details.effective' 'maxOutputTokens' 'max' 'median' 'unknown' 'MetricsPayload' '/v1/metrics' '/v1/reload' 'update_monitor.py' 'SMAppService' 'loginLaunchPreferred' '/v1/settings' '/v1/cancel' 'adapter_policies' 'model_policies' 'exclusive_groups' 'estimated_memory_gb' '/v1/prune-models' 'persistentSummaries' 'unusedAdapters' 'settings.diagnostics.configuration' 'builtinPluginTemplates' 'loadPluginTemplates'; do
   grep -Eq -- "$pattern" apps/ModelDispatchMenu/Sources/ModelDispatchMenu/main.swift
 done
 for locale in Base.lproj en.lproj zh-Hans.lproj; do
   test -f "apps/ModelDispatchMenu/Resources/$locale/Localizable.strings"
 done
+# Settings pages must keep their rows packed at the top: a stack stretched to
+# the container height spreads every row and pushes the last controls below the
+# fold, which is the layout bug this guard prevents from coming back.
+grep -q 'container.heightAnchor.constraint(equalTo: stack.heightAnchor)' apps/ModelDispatchMenu/Sources/ModelDispatchMenu/main.swift
+grep -q 'stack.bottomAnchor.constraint(lessThanOrEqualTo: container.bottomAnchor)' apps/ModelDispatchMenu/Sources/ModelDispatchMenu/main.swift
+if grep -q 'stack.bottomAnchor.constraint(equalTo: container.bottomAnchor)' apps/ModelDispatchMenu/Sources/ModelDispatchMenu/main.swift; then
+  echo "settings page stretches its stack to the container height" >&2
+  exit 2
+fi
 LOCALE_KEYS=$(mktemp -d "${TMPDIR:-/tmp}/inference-dock-locale.XXXXXX")
 for locale in Base.lproj en.lproj zh-Hans.lproj; do
   sed -n 's/^"\([^"]*\)"[[:space:]]*=.*/\1/p' "apps/ModelDispatchMenu/Resources/$locale/Localizable.strings" | sort > "$LOCALE_KEYS/$locale"

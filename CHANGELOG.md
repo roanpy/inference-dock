@@ -6,6 +6,28 @@ developer preview.
 
 ## [Unreleased]
 
+### Fixed
+
+- A settings file that still referenced a deleted model or adapter no longer
+  discards the whole saved policy. Unknown policy IDs are ignored with a visible
+  warning, so smart scheduling and the idle-unload timeout survive a cleanup.
+- Settings pages open at their first row and keep content at the top instead of
+  showing blank space above a stretched page.
+
+### Changed
+
+- Cleaning missing mappings is now a reviewed operation: the menu sends the
+  exact model and unused-adapter IDs plus the configuration revision, and the
+  core refuses a stale revision, a resident model, or a still-referenced
+  adapter. A permission-restricted backup of the previous file is always kept.
+- The diagnostics page shows the configuration and policy file paths, the
+  configuration revision, active policy, ignored policy IDs, and unused
+  adapters.
+- Run history also renders the stored cross-restart aggregates with their
+  sample counts; it is no longer limited to this process's in-memory tail.
+- The import template list is read from the bundled plugin manifests, so a new
+  engine manifest appears without editing the menu source.
+
 ### v0.1.0-dev.2
 
 - Menu server groups now use API/config adapter IDs directly, with localized

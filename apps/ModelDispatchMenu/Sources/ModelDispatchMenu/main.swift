@@ -143,8 +143,9 @@ struct ModelMetricSummary: Decodable {
 struct MetricsPayload: Decodable {
     let requests: [RequestMetric]
     let summaries: [ModelMetricSummary]
+    let persistent: [String: [String: PersistentBucket]]
 
-    enum CodingKeys: String, CodingKey { case requests, summary, summaries }
+    enum CodingKeys: String, CodingKey { case requests, summary, summaries, persistentSummaries = "persistent_summaries" }
 
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
@@ -158,7 +159,20 @@ struct MetricsPayload: Decodable {
         } else {
             summaries = []
         }
+        let stored = try? values.decode(PersistentSummaries.self, forKey: .persistentSummaries)
+        persistent = stored?.models ?? [:]
     }
+}
+
+/// Per-model numeric aggregates kept on disk, so evidence survives a restart
+/// instead of disappearing with the in-memory tail.
+struct PersistentBucket: Decodable {
+    let count: Int?
+    let metrics: [String: MetricSeries]?
+}
+
+struct PersistentSummaries: Decodable {
+    let models: [String: [String: PersistentBucket]]
 }
 
 struct DiscoveryItem: Decodable {
@@ -235,10 +249,27 @@ struct DiscoveryDiagnostic: Decodable {
 
 struct ConfigReport: Decodable {
     let path: String
+    let revision: String?
+    let settingsPath: String?
+    let settingsWarnings: [String]?
+    let unusedAdapters: [String]?
+
+    enum CodingKeys: String, CodingKey {
+        case path, revision
+        case settingsPath = "settings_path"
+        case settingsWarnings = "settings_warnings"
+        case unusedAdapters = "unused_adapters"
+    }
 }
 
 struct PruneModelsResult: Decodable {
     let removed: [String]
+    let adaptersRemoved: [String]?
+
+    enum CodingKeys: String, CodingKey {
+        case removed
+        case adaptersRemoved = "adapters_removed"
+    }
 }
 
 struct RuntimeMetadata: Decodable {
@@ -517,8 +548,8 @@ final class CoreClient {
         _ = try await send(path: "/v1/reload", method: "POST", body: [:])
     }
 
-    func pruneUnavailableModels() async throws -> PruneModelsResult {
-        let data = try await send(path: "/v1/prune-models", method: "POST", body: [:])
+    func pruneUnavailableModels(models: [String], revision: String, adapters: [String]) async throws -> PruneModelsResult {
+        let data = try await send(path: "/v1/prune-models", method: "POST", body: ["models": models, "adapters": adapters, "revision": revision])
         return try JSONDecoder().decode(PruneModelsResult.self, from: data)
     }
 
@@ -578,6 +609,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private weak var settingsLoginLaunch: NSButton?
     private weak var settingsModelsTextView: NSTextView?
     private weak var settingsPruneModelsButton: NSButton?
+    private weak var settingsDiagnosticsLabel: NSTextField?
     private var settingsResidentChecks: [NSButton] = []
     private var settingsExclusivePopups: [(String, NSPopUpButton)] = []
 
@@ -819,10 +851,63 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         tabs.addTabViewItem(settingsTab(title: T("settings.tab.agents"), view: agentSettingsView()))
         tabs.addTabViewItem(settingsTab(title: T("settings.tab.diagnostics"), view: updateSettingsView()))
         window.contentView = tabs
+        window.contentMinSize = NSSize(width: 720, height: 480)
         settingsWindow = window
         window.center()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+        loadPluginTemplates()
+    }
+
+    /// Fallback order used before (or instead of) reading the bundled manifests.
+    private static let builtinPluginTemplates = [
+        "ds4", "mlx-serve", "mtplx", "llama-cpp", "ollama", "omlx",
+        "lm-studio", "mlx-lm", "mlx-vlm", "vllm-mlx", "fastmlx"
+    ]
+
+    /// The manifest directory is the single source of truth for importable
+    /// engines, so a newly added plugin appears here without editing the menu.
+    private func loadPluginTemplates() {
+        let script = Bundle.main.bundleURL.appendingPathComponent("Contents/scripts/plugin_registry.py")
+        let plugins = Bundle.main.bundleURL.appendingPathComponent("Contents/plugins")
+        guard FileManager.default.isReadableFile(atPath: script.path) else { return }
+        let worker = Task.detached(priority: .utility) { Self.pluginTemplateIDs(script: script, plugins: plugins) }
+        Task { @MainActor [weak self] in
+            let ids = await worker.value
+            guard let self, !ids.isEmpty, let popup = self.settingsPluginTemplatePopup else { return }
+            let selected = popup.titleOfSelectedItem
+            popup.removeAllItems()
+            popup.addItems(withTitles: ids)
+            if let selected, let index = popup.itemTitles.firstIndex(of: selected) { popup.selectItem(at: index) }
+        }
+    }
+
+    private static func pluginTemplateIDs(script: URL, plugins: URL) -> [String] {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = ["python3", script.path, "check", "--plugins-dir", plugins.path]
+        let stdout = Pipe()
+        process.standardOutput = stdout
+        process.standardError = Pipe()
+        do {
+            try process.run()
+        } catch {
+            return []
+        }
+        let drain = DispatchGroup()
+        var data = Data()
+        drain.enter()
+        DispatchQueue.global(qos: .utility).async {
+            data = stdout.fileHandleForReading.readDataToEndOfFile()
+            drain.leave()
+        }
+        pollProcess(process, timeout: 8)
+        _ = drain.wait(timeout: .now() + 1)
+        let object = try? JSONSerialization.jsonObject(with: data)
+        guard process.terminationStatus == 0,
+              let payload = object as? [String: Any],
+              let manifests = payload["manifests"] as? [[String: Any]] else { return [] }
+        return manifests.compactMap { $0["id"] as? String }.sorted()
     }
 
     private func settingsTab(title: String, view: NSView) -> NSTabViewItem {
@@ -840,6 +925,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             view.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor),
             view.heightAnchor.constraint(greaterThanOrEqualTo: scroll.contentView.heightAnchor)
         ])
+        // A fresh page must open at its first row. Without this the scroll view
+        // keeps the bottom-left origin of the flipped document view, which is
+        // why longer pages appeared to start with blank space and cut the end.
+        scroll.contentView.scroll(to: .zero)
+        scroll.reflectScrolledClipView(scroll.contentView)
         item.view = scroll
         return item
     }
@@ -965,7 +1055,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsHeading(T("settings.server.heading"), in: stack)
         stack.addArrangedSubview(settingsHint(T("settings.server.template")))
         let template = NSPopUpButton()
-        ["ds4", "mlx-serve", "mtplx", "llama-cpp", "ollama", "omlx", "lm-studio", "mlx-lm", "mlx-vlm", "vllm-mlx"].forEach { template.addItem(withTitle: $0) }
+        Self.builtinPluginTemplates.forEach { template.addItem(withTitle: $0) }
         template.identifier = NSUserInterfaceItemIdentifier("inferencedock.plugin.template")
         settingsPluginTemplatePopup = template
         template.translatesAutoresizingMaskIntoConstraints = false
@@ -1008,16 +1098,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         stack.addArrangedSubview(capabilityScroll)
         settingsFullWidth(capabilityScroll, in: stack)
         stack.addArrangedSubview(settingsButton(T("settings.refresh"), action: #selector(refreshSettingsData)))
-        let container = TopAlignedView()
-        container.addSubview(stack)
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            stack.topAnchor.constraint(equalTo: container.topAnchor),
-            stack.bottomAnchor.constraint(equalTo: container.bottomAnchor)
-        ])
-        return container
+        return settingsContainer(stack)
     }
 
     private func policySettingsView() -> NSView {
@@ -1050,14 +1131,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         stack.addArrangedSubview(settingsHint(T("settings.policy.resident")))
         stack.addArrangedSubview(settingsButton(T("settings.save"), action: #selector(savePolicySettings)))
-        let container = TopAlignedView()
-        container.addSubview(stack)
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: container.leadingAnchor), stack.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            stack.topAnchor.constraint(equalTo: container.topAnchor), stack.bottomAnchor.constraint(equalTo: container.bottomAnchor)
-        ])
-        return container
+        return settingsContainer(stack)
     }
 
     private func modelSettingsView() -> NSView {
@@ -1069,8 +1143,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         stack.addArrangedSubview(scroll)
         settingsFullWidth(scroll, in: stack)
         stack.addArrangedSubview(settingsButton(T("settings.refresh"), action: #selector(refreshSettingsData)))
-        let missing = unavailableModels()
-        let prune = settingsButton(T("settings.models.prune", missing.count), action: #selector(pruneUnavailableModels), enabled: !missing.isEmpty)
+        let removable = unavailableModels().count + unusedAdapters().count
+        let prune = settingsButton(T("settings.models.prune", removable), action: #selector(pruneUnavailableModels), enabled: removable > 0)
         settingsPruneModelsButton = prune
         stack.addArrangedSubview(prune)
         stack.addArrangedSubview(settingsHint(T("settings.models.pruneHint")))
@@ -1113,16 +1187,59 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         stack.addArrangedSubview(settingsButton(T("menu.checkUpdates"), action: #selector(checkUpdates)))
         stack.addArrangedSubview(settingsButton(T("settings.updates.rollback"), action: nil, enabled: false))
         stack.addArrangedSubview(settingsHint(T("settings.updates.rollbackUnsupported")))
+        settingsHeading(T("settings.diagnostics.configuration"), in: stack)
+        let diagnostics = settingsHint(diagnosticsText())
+        settingsDiagnosticsLabel = diagnostics
+        stack.addArrangedSubview(diagnostics)
+        settingsFullWidth(diagnostics, in: stack)
+        let actions = NSStackView(views: [
+            settingsButton(T("settings.diagnostics.reload"), action: #selector(reloadSettingsConfig)),
+            settingsButton(T("settings.refresh"), action: #selector(refreshSettingsData))
+        ])
+        actions.spacing = 8
+        stack.addArrangedSubview(actions)
         return settingsContainer(stack)
+    }
+
+    /// Shows where policy comes from, so an ignored settings file or a removed
+    /// adapter is visible instead of silently changing behaviour.
+    private func diagnosticsText() -> String {
+        let config = latestConfig
+        var lines = ["\(T("settings.diagnostics.configPath")): \(config?.path ?? T("unknown"))"]
+        if let settingsPath = config?.settingsPath {
+            lines.append("\(T("settings.diagnostics.settingsPath")): \(settingsPath)")
+        }
+        if let revision = config?.revision {
+            lines.append("\(T("settings.diagnostics.revision")): \(revision.prefix(12))")
+        }
+        let idle = coreSettings?.idleUnloadSeconds.map { String(format: "%.0f", $0) } ?? T("idle.off")
+        lines.append("\(T("settings.diagnostics.policy")): \(T("settings.diagnostics.policySummary", coreSettings?.smartScheduling == true ? T("value.true") : T("value.false"), idle))")
+        if let warnings = config?.settingsWarnings, !warnings.isEmpty {
+            lines.append(T("settings.diagnostics.warnings") + ":\n" + warnings.map { "• \($0)" }.joined(separator: "\n"))
+        }
+        if let unused = config?.unusedAdapters, !unused.isEmpty {
+            lines.append("\(T("settings.diagnostics.unusedAdapters")): \(unused.joined(separator: ", "))")
+        }
+        return lines.joined(separator: "\n")
     }
 
     private func settingsContainer(_ stack: NSStackView) -> NSView {
         let container = TopAlignedView()
         container.addSubview(stack)
         stack.translatesAutoresizingMaskIntoConstraints = false
+        // A vertical NSStackView that fills its container spreads the extra
+        // height across every arranged row, which pushed the last controls below
+        // the fold and left blank gaps on short pages. The container therefore
+        // takes the stack's own height (high priority, breakable) while the tab
+        // keeps it at least as tall as the viewport, so rows stay packed at the
+        // top and only the page itself scrolls when it is genuinely long.
+        let hugContent = container.heightAnchor.constraint(equalTo: stack.heightAnchor)
+        hugContent.priority = .defaultHigh
         NSLayoutConstraint.activate([
             stack.leadingAnchor.constraint(equalTo: container.leadingAnchor), stack.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            stack.topAnchor.constraint(equalTo: container.topAnchor), stack.bottomAnchor.constraint(equalTo: container.bottomAnchor)
+            stack.topAnchor.constraint(equalTo: container.topAnchor),
+            stack.bottomAnchor.constraint(lessThanOrEqualTo: container.bottomAnchor),
+            hugContent
         ])
         return container
     }
@@ -1160,7 +1277,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func unavailableModels() -> [ModelEntry] {
-        (latestStatus?.models ?? []).filter { $0.available == false && !modelIsLoaded($0) }
+        // Same rule the core enforces before it will drop a mapping: confirmed
+        // missing locally and not resident (or already failed).
+        (latestStatus?.models ?? []).filter { $0.available == false && ["unloaded", "failed"].contains($0.state) }
+    }
+
+    private func unusedAdapters() -> [String] {
+        latestConfig?.unusedAdapters ?? []
+    }
+
+    private func pruneSummary() -> String {
+        var lines = unavailableModels().map { "\(T("settings.models.pruneModels")): \($0.displayName ?? $0.id)" }
+        lines.append(contentsOf: unusedAdapters().map { "\(T("settings.models.pruneAdapters")): \($0)" })
+        return lines.joined(separator: "\n")
     }
 
     private func capabilityPreviewText() -> String {
@@ -1203,19 +1332,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func pruneUnavailableModels() {
         let models = unavailableModels()
-        guard !models.isEmpty else { return }
+        let adapters = unusedAdapters()
+        guard !models.isEmpty || !adapters.isEmpty else { return }
+        guard let revision = latestConfig?.revision else {
+            presentError(NSError(domain: "ModelDispatch", code: 409, userInfo: [NSLocalizedDescriptionKey: T("settings.models.pruneStale")]))
+            refresh()
+            return
+        }
         let alert = NSAlert()
         alert.messageText = T("settings.models.pruneConfirmTitle")
-        alert.informativeText = T("settings.models.pruneConfirmBody", models.map { $0.displayName ?? $0.id }.joined(separator: "\n"))
+        alert.informativeText = T("settings.models.pruneConfirmBody", pruneSummary())
         alert.addButton(withTitle: T("settings.models.pruneAction"))
         alert.addButton(withTitle: T("dialog.cancel"))
         guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let reviewed = models.map(\.id)
         Task { [weak self] in
             guard let self else { return }
             do {
-                let result = try await self.client.pruneUnavailableModels()
+                let result = try await self.client.pruneUnavailableModels(models: reviewed, revision: revision, adapters: adapters)
                 await MainActor.run {
-                    self.presentScrollableAlert(title: T("settings.models.pruneDone"), text: result.removed.joined(separator: "\n"))
+                    var text = result.removed.joined(separator: "\n")
+                    if let removedAdapters = result.adaptersRemoved, !removedAdapters.isEmpty {
+                        text += "\n" + T("settings.models.pruneAdapters") + ": " + removedAdapters.joined(separator: ", ")
+                    }
+                    self.presentScrollableAlert(title: T("settings.models.pruneDone"), text: text.isEmpty ? T("settings.none") : text)
                     self.refresh()
                 }
             } catch { self.presentError(error) }
@@ -1434,9 +1574,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     self.latestMetrics = metrics
                     self.latestConfig = config
                     self.settingsModelsTextView?.string = self.modelDetailsText()
-                    let missing = self.unavailableModels()
-                    self.settingsPruneModelsButton?.title = T("settings.models.prune", missing.count)
-                    self.settingsPruneModelsButton?.isEnabled = !missing.isEmpty
+                    let removable = self.unavailableModels().count + self.unusedAdapters().count
+                    self.settingsPruneModelsButton?.title = T("settings.models.prune", removable)
+                    self.settingsPruneModelsButton?.isEnabled = removable > 0
+                    self.settingsDiagnosticsLabel?.stringValue = self.diagnosticsText()
                     self.statusItem.button?.toolTip = T("tooltip.active", status.activeModels.isEmpty ? T("none") : status.activeModels.joined(separator: ", "))
                     self.rebuildMenu()
                 }
@@ -1912,24 +2053,60 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func runHistoryText() -> String {
         var lines = [T("dialog.history.policy")]
+        var sections: [String] = []
         if let metrics = latestMetrics, !metrics.summaries.isEmpty {
             for summary in metrics.summaries.sorted(by: { $0.model < $1.model }) {
-                lines.append(metricSummaryText(summary))
+                sections.append(metricSummaryText(summary))
             }
-            return lines.joined(separator: "\n\n")
-        }
-        let requests = latestMetrics?.requests ?? []
-        if !requests.isEmpty {
+        } else if let requests = latestMetrics?.requests, !requests.isEmpty {
             let grouped = Dictionary(grouping: requests, by: \.model)
             for model in grouped.keys.sorted() {
-                lines.append(computedSummaryText(model: model, requests: grouped[model] ?? []))
+                sections.append(computedSummaryText(model: model, requests: grouped[model] ?? []))
             }
         } else if let metric = latestStatus?.latestRequest {
-            lines.append(T("dialog.history.latest", metric.model))
+            sections.append(T("dialog.history.latest", metric.model))
         } else {
-            lines.append(T("dialog.noHistory"))
+            sections.append(T("dialog.noHistory"))
         }
+        if let persistent = persistentHistoryText() {
+            sections.append(persistent)
+        }
+        lines.append(contentsOf: sections)
         return lines.joined(separator: "\n\n")
+    }
+
+    /// Cross-restart aggregates with their sample counts, so a median is never
+    /// read as a benchmark without knowing how many requests produced it.
+    private func persistentHistoryText() -> String? {
+        let models = latestMetrics?.persistent ?? [:]
+        guard !models.isEmpty else { return nil }
+        var lines = [T("dialog.history.persistent")]
+        for model in models.keys.sorted() {
+            let buckets = models[model] ?? [:]
+            lines.append("\(model):")
+            for bucket in ["cold_start", "warm", "cache_hit", "cache_miss", "cache_unknown"] {
+                guard let entry = buckets[bucket] else { continue }
+                var parts = ["n=\(entry.count.map(String.init) ?? T("unknown"))"]
+                let metrics = entry.metrics ?? [:]
+                if let decode = metrics["tokens_per_second"] {
+                    parts.append("\(T("dialog.history.decode")) \(series(decode, field: .median)) / \(series(decode, field: .max))")
+                }
+                if let prefill = metrics["prefill_tokens_per_second"] {
+                    parts.append("\(T("dialog.history.prefill")) \(series(prefill, field: .median))")
+                }
+                if let ttft = metrics["ttft_ms"] {
+                    parts.append("TTFT \(series(ttft, field: .median, suffix: "ms"))")
+                }
+                if let cache = metrics["cached_tokens"] {
+                    parts.append("\(T("dialog.history.cache")) \(series(cache, field: .mean, suffix: "tokens"))")
+                }
+                if let cold = metrics["cold_load_ms"] {
+                    parts.append("\(T("dialog.history.coldLoad")) \(series(cold, field: .median, suffix: "ms"))")
+                }
+                lines.append("  \(bucket): " + parts.joined(separator: " · "))
+            }
+        }
+        return lines.joined(separator: "\n")
     }
 
     private func metricSummaryText(_ summary: ModelMetricSummary) -> String {
