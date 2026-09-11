@@ -8,6 +8,7 @@ import json
 import os
 import socket
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -2530,15 +2531,109 @@ def test_prune_unavailable_models_backs_up_and_reloads():
                 "missing": {"adapter": "cli", "backend_model": "missing-id"},
             },
         }
+        config_data["adapters"]["unused"] = {"type": "managed", "port": free_port(), "command": [sys.executable]}
         path = root / "engines.yaml"
         path.write_text(yaml.safe_dump(config_data, sort_keys=False), encoding="utf-8")
         dispatcher = model_dispatch.ModelDispatcher(model_dispatch.load_config(path), root)
         try:
-            result = dispatcher.prune_unavailable_models()
+            revision = dispatcher.config_report()["revision"]
+            assert dispatcher.config_report()["unused_adapters"] == ["unused"]
+            # Only the reviewed IDs leave the file, and a stale revision is refused.
+            for bad in (
+                {"models": ["missing"], "adapters": ["unused"], "revision": "stale"},
+                {"models": ["present"], "adapters": [], "revision": revision},
+                {"models": [], "adapters": ["cli"], "revision": revision},
+                {"models": ["absent-from-config"], "adapters": [], "revision": revision},
+            ):
+                try:
+                    dispatcher.prune_unavailable_models(bad["models"], bad["revision"], bad["adapters"])
+                except model_dispatch.DispatchError:
+                    pass
+                else:
+                    raise AssertionError(f"unsafe prune accepted: {bad}")
+            result = dispatcher.prune_unavailable_models(["missing"], revision, ["unused"])
             assert result["removed"] == ["missing"]
-            assert Path(result["backup"]).is_file()
+            assert result["adapters_removed"] == ["unused"]
+            backup = Path(result["backup"])
+            assert backup.is_file() and stat.S_IMODE(backup.stat().st_mode) == 0o600
+            assert yaml.safe_load(backup.read_text(encoding="utf-8")) == config_data
+            written = yaml.safe_load(path.read_text(encoding="utf-8"))
+            assert set(written["models"]) == {"present"} and set(written["adapters"]) == {"cli"}
             assert set(dispatcher.config.models) == {"present"}
-            assert set(yaml.safe_load(path.read_text(encoding="utf-8"))["models"]) == {"present"}
+            try:
+                dispatcher.prune_unavailable_models(["missing"], revision, [])
+            except model_dispatch.DispatchError:
+                pass
+            else:
+                raise AssertionError("a revision was reused after the config changed")
+        finally:
+            dispatcher.shutdown()
+
+
+def test_settings_survive_removed_model_ids():
+    """Cleaning a model must not discard the saved scheduling policy.
+
+    A settings file that still lists a removed model or adapter used to fail
+    validation as a whole, which silently reset smart scheduling and the idle
+    unload timeout to their defaults.
+    """
+    with tempfile.TemporaryDirectory(prefix="model-dispatch-settings-test-") as tmp:
+        root = Path(tmp)
+        config_data = {
+            "listen_port": free_port(),
+            "adapters": {"cli": {"type": "managed", "port": free_port(), "command": [sys.executable]}},
+            "models": {"kept": {"adapter": "cli", "backend_model": "kept-id"}},
+        }
+        path = root / "engines.yaml"
+        path.write_text(yaml.safe_dump(config_data, sort_keys=False), encoding="utf-8")
+        settings_path = root / "settings.json"
+        settings_path.write_text(
+            json.dumps(
+                {
+                    "smart_scheduling": True,
+                    "idle_unload_seconds": 300,
+                    "memory_limit_gb": None,
+                    "adapter_policies": {"removed-adapter": {"exclusive_groups": []}},
+                    "model_policies": {
+                        "removed-model": {"keep_resident": False},
+                        "kept": {"keep_resident": True},
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        old_settings = os.environ.get("INFERENCEDOCK_SETTINGS_PATH")
+        os.environ["INFERENCEDOCK_SETTINGS_PATH"] = str(settings_path)
+        try:
+            dispatcher = model_dispatch.ModelDispatcher(model_dispatch.load_config(path), root)
+        finally:
+            if old_settings is None:
+                os.environ.pop("INFERENCEDOCK_SETTINGS_PATH", None)
+            else:
+                os.environ["INFERENCEDOCK_SETTINGS_PATH"] = old_settings
+        try:
+            assert dispatcher.settings["smart_scheduling"] is True
+            assert dispatcher.settings["idle_unload_seconds"] == 300.0
+            assert dispatcher.config.idle_unload_seconds == 300.0
+            assert "removed-adapter" not in dispatcher.settings["adapter_policies"]
+            assert "removed-model" not in dispatcher.settings["model_policies"]
+            assert dispatcher.settings["model_policies"]["kept"]["keep_resident"] is True
+            assert dispatcher._keep_resident(dispatcher.config.models["kept"]) is True
+            assert dispatcher.settings_warnings
+            try:
+                dispatcher.update_settings({"model_policies": {"nope": {"keep_resident": True}}})
+            except model_dispatch.ConfigError:
+                pass
+            else:
+                raise AssertionError("unknown model policy accepted")
+            dispatcher.reload_config()
+            assert dispatcher.settings["smart_scheduling"] is True
+            assert dispatcher.config.idle_unload_seconds == 300.0
+            assert dispatcher.settings["model_policies"]["kept"]["keep_resident"] is True
+            assert "removed-model" not in dispatcher.settings["model_policies"]
+            report = dispatcher.config_report()
+            assert report["settings_warnings"] and report["revision"]
+            assert report["unused_adapters"] == []
         finally:
             dispatcher.shutdown()
 
@@ -2795,6 +2890,9 @@ def main():
     print("run test_prune_unavailable_models_backs_up_and_reloads", flush=True)
     test_prune_unavailable_models_backs_up_and_reloads()
     print("ok test_prune_unavailable_models_backs_up_and_reloads", flush=True)
+    print("run test_settings_survive_removed_model_ids", flush=True)
+    test_settings_survive_removed_model_ids()
+    print("ok test_settings_survive_removed_model_ids", flush=True)
     print("run test_identity_validation_and_diagnostics", flush=True)
     test_identity_validation_and_diagnostics()
     print("ok test_identity_validation_and_diagnostics", flush=True)

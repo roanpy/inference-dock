@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -981,6 +982,7 @@ def listener_rss_gb(port: int) -> float | None:
 class ModelDispatcher:
     def __init__(self, config: DispatchConfig, root: Path):
         self.config = config
+        self._config_bytes = config.path.read_bytes()
         self.root = root
         self.condition = threading.Condition()
         self._transition_locks = self._build_transition_locks(config)
@@ -1001,14 +1003,13 @@ class ModelDispatcher:
         # can never cancel another client of the same model.
         self._requests: dict[str, dict[str, Any]] = {}
         self.settings_path = Path(os.environ.get("INFERENCEDOCK_SETTINGS_PATH", str(SETTINGS_PATH))).expanduser()
+        self.settings_warnings: list[str] = []
         self.settings = self._load_settings()
         # The idle loop reads the config copy, so a timeout persisted in the
         # settings file has to be merged before the thread starts. Without this
         # a menu-bar timeout leaves config.idle_unload_seconds at None and every
         # model is skipped as if automatic unload were switched off.
-        persisted_idle = self.settings.get("idle_unload_seconds")
-        if persisted_idle is not None:
-            self.config = dataclass_replace(self.config, idle_unload_seconds=persisted_idle)
+        self.config = dataclass_replace(self.config, idle_unload_seconds=self.settings.get("idle_unload_seconds"))
         self.last_request_finished = time.monotonic()
         self._idle_stop = threading.Event()
         self._idle_thread = None
@@ -1035,9 +1036,26 @@ class ModelDispatcher:
         defaults = {"smart_scheduling": False, "memory_limit_gb": None, "idle_unload_seconds": self.config.idle_unload_seconds, "adapter_policies": {}, "model_policies": {}}
         try:
             payload = json.loads(self.settings_path.read_text(encoding="utf-8"))
-            return self._validate_settings(payload, defaults)
-        except (OSError, ValueError, ConfigError):
+            return self._validate_settings(self._current_policies(payload, self.config), defaults)
+        except FileNotFoundError:
             return defaults
+        except (OSError, ValueError, ConfigError) as exc:
+            self.settings_warnings.append(f"Saved settings could not be applied ({type(exc).__name__}); defaults are active.")
+            return defaults
+
+    def _current_policies(self, payload: Any, config: DispatchConfig) -> Any:
+        """Ignore orphaned policy IDs on disk; API writes still reject unknown IDs."""
+        if not isinstance(payload, dict):
+            return payload
+        payload = dict(payload)
+        for key, known in (("adapter_policies", config.adapters), ("model_policies", config.models)):
+            policies = payload.get(key)
+            if isinstance(policies, dict):
+                stale = set(policies) - set(known)
+                if stale:
+                    self.settings_warnings.append(f"Ignored {len(stale)} removed IDs in {key}.")
+                payload[key] = {name: policy for name, policy in policies.items() if name in known}
+        return payload
 
     def _validate_settings(self, payload: Any, base: dict[str, Any] | None = None) -> dict[str, Any]:
         if not isinstance(payload, dict):
@@ -1139,6 +1157,7 @@ class ModelDispatcher:
                     temp_path.unlink(missing_ok=True)
                 raise
             self.settings = updated
+            self.settings_warnings.clear()
             self.config = dataclass_replace(self.config, idle_unload_seconds=updated.get("idle_unload_seconds"))
             if updated.get("idle_unload_seconds") is not None and self._idle_thread is None:
                 self._idle_thread = threading.Thread(target=self._idle_loop, name="model-dispatch-idle", daemon=True)
@@ -1193,7 +1212,10 @@ class ModelDispatcher:
                 raise DispatchError("cannot reload configuration while the dispatcher is busy", 409, "dispatcher_busy")
             previous = self.config
             try:
+                config_bytes = previous.path.read_bytes()
                 new_config = load_config(previous.path)
+                if previous.path.read_bytes() != config_bytes:
+                    raise DispatchError("configuration changed during reload; retry", 409, "config_changed")
             except ConfigError as exc:
                 raise DispatchError(f"config reload failed: {exc}", 400, "invalid_config") from exc
             if (new_config.listen_host, new_config.listen_port) != (previous.listen_host, previous.listen_port):
@@ -1207,7 +1229,10 @@ class ModelDispatcher:
                 new_adapter = new_config.models[model_name].adapter
                 if old_adapter != new_adapter:
                     raise DispatchError(f"config reload cannot move loaded model {model_name!r} to adapter {new_adapter!r}", 409, "reload_removes_loaded_model")
-            for adapter_name, backend in self._backends.items():
+            for adapter_name, backend in list(self._backends.items()):
+                process = getattr(backend, "process", None)
+                if process is None or process.poll() is not None:
+                    continue
                 if adapter_name not in new_config.adapters:
                     raise DispatchError(f"config reload cannot remove adapter {adapter_name!r} while it owns a process", 409, "reload_removes_loaded_model")
                 if new_config.adapters[adapter_name] != previous.adapters[adapter_name]:
@@ -1217,6 +1242,10 @@ class ModelDispatcher:
             # value applies.
             idle = self.settings.get("idle_unload_seconds") if self.settings_path.exists() else new_config.idle_unload_seconds
             self.config = dataclass_replace(new_config, idle_unload_seconds=idle)
+            self._config_bytes = config_bytes
+            self.settings = self._current_policies(self.settings, new_config)
+            self.settings["idle_unload_seconds"] = idle
+            self._backends = {name: backend for name, backend in self._backends.items() if name in new_config.adapters and new_config.adapters[name] == previous.adapters[name]}
             with self._catalog_lock:
                 self._catalog_cache.clear()
             with self._models_path_lock:
@@ -1226,6 +1255,9 @@ class ModelDispatcher:
                 name: self._models.get(name, ModelRuntime())
                 for name in new_config.models
             }
+            if idle is not None and self._idle_thread is None:
+                self._idle_thread = threading.Thread(target=self._idle_loop, name="model-dispatch-idle", daemon=True)
+                self._idle_thread.start()
             self.condition.notify_all()
             return {
                 "reloaded": True,
@@ -1240,6 +1272,10 @@ class ModelDispatcher:
         config = self.config
         return {
             "path": str(config.path),
+            "revision": hashlib.sha256(self._config_bytes).hexdigest(),
+            "settings_path": str(self.settings_path),
+            "settings_warnings": list(self.settings_warnings),
+            "unused_adapters": sorted(set(config.adapters) - {model.adapter for model in config.models.values()}),
             "models_configured": len(config.models),
             "models_visible": sum(1 for model in config.models.values() if model.advertise and model.enabled),
             "aliases": len(config.model_aliases),
@@ -1256,54 +1292,82 @@ class ModelDispatcher:
             ],
         }
 
-    def prune_unavailable_models(self) -> dict[str, Any]:
-        """Remove only confirmed-missing, unloaded model mappings from the user config."""
+    def prune_unavailable_models(self, model_names: list[str], revision: str, adapter_names: list[str] | None = None) -> dict[str, Any]:
+        """Remove exactly the reviewed missing mappings, preserving a full backup."""
+        adapter_names = [] if adapter_names is None else adapter_names
+        for names in (model_names, adapter_names):
+            if not isinstance(names, list) or any(not isinstance(name, str) or not name for name in names) or len(set(names)) != len(names):
+                raise DispatchError("models/adapters must contain unique IDs", 400, "invalid_request_error")
+        if not isinstance(revision, str) or not revision or not (model_names or adapter_names):
+            raise DispatchError("reviewed IDs and config revision are required", 400, "invalid_request_error")
         with self.condition:
-            if self.active_requests or self._busy():
+            # Validate identity before the busy gate so a stale review is
+            # reported as such instead of as a transient busy conflict.
+            if revision != hashlib.sha256(self._config_bytes).hexdigest():
+                raise DispatchError("configuration changed; refresh and review again", 409, "config_changed")
+            if self.active_requests or self._busy() or self._transitions_active:
                 raise DispatchError("cannot clean model configuration while the dispatcher is busy", 409, "dispatcher_busy")
+            config = self.config
+        self._refresh_observed_states()
         self._refresh_local_catalogs(force=True)
         self._refresh_models_paths(force=True)
         catalogs = self._catalog_snapshot()
         models_paths = self._models_path_snapshot()
-        removed = {
-            model.name for model in self.config.models.values()
-            if self._models[model.name].state not in {"loading", "ready", "generating", "busy"}
-            and self._model_availability(model, self.config.adapters, catalogs, models_paths)["available"] is False
-        }
-        while True:
-            dependent = {model.name for model in self.config.models.values() if model.canonical in removed}
-            if dependent <= removed:
-                break
-            removed.update(dependent)
-        if not removed:
-            raise DispatchError("no confirmed-missing model configuration to clean", 409, "no_unavailable_models")
-        if len(removed) >= len(self.config.models):
-            raise DispatchError("refusing to remove every configured model", 409, "invalid_config")
-
-        path = self.config.path
-        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
-        if not isinstance(raw, dict) or not isinstance(raw.get("models"), dict):
-            raise DispatchError("configuration has no writable models mapping", 500, "config_update_failed")
-        for name in removed:
-            raw["models"].pop(name, None)
-        backup = path.with_name(f"{path.name}.bak-before-prune-{time.strftime('%Y%m%d-%H%M%S')}")
-        shutil.copy2(path, backup)
-        temp_path = None
-        try:
-            with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, delete=False) as handle:
-                yaml.safe_dump(raw, handle, allow_unicode=True, sort_keys=False)
+        with self.condition:
+            if config is not self.config or revision != hashlib.sha256(self._config_bytes).hexdigest():
+                raise DispatchError("configuration changed; refresh and review again", 409, "config_changed")
+            if self.active_requests or self._busy() or self._transitions_active:
+                raise DispatchError("cannot clean model configuration while the dispatcher is busy", 409, "dispatcher_busy")
+            removed = set(model_names)
+            for name in removed:
+                model = config.models.get(name)
+                if model is None or self._models[name].state not in {"unloaded", "failed"} or self._model_availability(model, config.adapters, catalogs, models_paths)["available"] is not False:
+                    raise DispatchError(f"model {name!r} is not confirmed missing and unloaded", 409, "model_not_removable")
+            if any(model.name not in removed and model.canonical in removed for model in config.models.values()):
+                raise DispatchError("dependent model mappings also require review", 409, "model_dependencies")
+            if len(removed) >= len(config.models):
+                raise DispatchError("refusing to remove every configured model", 409, "invalid_config")
+            used = {model.adapter for model in config.models.values() if model.name not in removed}
+            for name in adapter_names:
+                backend = self._backends.get(name)
+                process = getattr(backend, "process", None)
+                if name not in config.adapters or name in used or (process is not None and process.poll() is None):
+                    raise DispatchError(f"adapter {name!r} is still referenced or running", 409, "adapter_not_removable")
+            path = config.path
+            if path.read_bytes() != self._config_bytes:
+                raise DispatchError("config file changed; reload and review again", 409, "config_changed")
+            raw = yaml.safe_load(self._config_bytes)
+            for name in removed:
+                raw["models"].pop(name)
+            for name in adapter_names:
+                raw["adapters"].pop(name)
+            backup = path.with_name(f"{path.name}.bak-before-prune-{time.time_ns()}")
+            with backup.open("xb") as handle:
+                os.chmod(backup, 0o600)
+                handle.write(self._config_bytes)
                 handle.flush()
                 os.fsync(handle.fileno())
-                temp_path = Path(handle.name)
-            os.replace(temp_path, path)
-            self.reload_config()
-        except Exception:
-            shutil.copy2(backup, path)
-            raise
-        finally:
-            if temp_path is not None and temp_path.exists():
-                temp_path.unlink()
-        return {"removed": sorted(removed), "backup": str(backup)}
+            temp_path = None
+            replaced = False
+            try:
+                with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, delete=False) as handle:
+                    temp_path = Path(handle.name)
+                    yaml.safe_dump(raw, handle, allow_unicode=True, sort_keys=False)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                if path.read_bytes() != self._config_bytes:
+                    raise DispatchError("config file changed; reload and review again", 409, "config_changed")
+                os.replace(temp_path, path)
+                replaced = True
+                self.reload_config()
+            except Exception:
+                if replaced:
+                    shutil.copy2(backup, path)
+                raise
+            finally:
+                if temp_path is not None:
+                    temp_path.unlink(missing_ok=True)
+            return {"removed": sorted(removed), "adapters_removed": sorted(adapter_names), "backup": str(backup)}
 
     def _transition_keys(self, model: ModelConfig) -> set[str]:
         keys = {f"adapter:{model.adapter}"}
@@ -1961,7 +2025,7 @@ class ModelDispatcher:
             waiting = gauges.get("requests_waiting", 0)
             if all(not isinstance(item, bool) and isinstance(item, (int, float)) and item >= 0 for item in (running, waiting)):
                 value = running + waiting
-        if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
             with self.condition:
                 self.last_error = f"activity probe for adapter {adapter.name!r} returned an invalid active_requests; assuming busy"
             return True
@@ -2838,14 +2902,15 @@ class DispatchHandler(BaseHTTPRequestHandler):
         if self.path == "/v1/settings":
             try:
                 settings = self.server.dispatcher.update_settings(self._body())
-            except (ConfigError, OSError) as exc:
-                self._error(DispatchError(str(exc), 400 if isinstance(exc, ConfigError) else 500, "invalid_settings" if isinstance(exc, ConfigError) else "settings_persist_failed"))
+            except (DispatchError, ConfigError, OSError) as exc:
+                self._error(exc if isinstance(exc, DispatchError) else DispatchError(str(exc), 400 if isinstance(exc, ConfigError) else 500, "invalid_settings" if isinstance(exc, ConfigError) else "settings_persist_failed"))
             else:
                 self._json(200, settings)
             return
         if self.path == "/v1/prune-models":
             try:
-                result = self.server.dispatcher.prune_unavailable_models()
+                payload = self._body()
+                result = self.server.dispatcher.prune_unavailable_models(payload.get("models"), payload.get("revision"), payload.get("adapters"))
             except (DispatchError, OSError, yaml.YAMLError) as exc:
                 self._error(exc if isinstance(exc, DispatchError) else DispatchError(str(exc), 500, "config_update_failed"))
             else:
